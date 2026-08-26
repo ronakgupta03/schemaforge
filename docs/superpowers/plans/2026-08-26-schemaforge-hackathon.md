@@ -3022,8 +3022,20 @@ Steps:
 - [ ] 10.4 Record the verified MCP server manifest shapes in this plan's
   "Verified harness reference" (already done) — nothing else to do.
 
-**Acceptance:** both MCP servers visible in TrueForge with tools; a scratch
-chat agent can call `list_tables` and a GitHub read tool.
+> **Day-2 verification (2026-08-26):** both servers visible
+> (`GET /api/v1/mcp-servers` → github authenticated / postgres-prod
+> not_required, tools populated under `data`), skills endpoint live
+> (`{"data":[]}` — import after Task 13). Scratch harness turns proved
+> harness→postgres-prod (`list_tables` → `{"result":["_mcp_probe"]}`) and the
+> harness→github path (tool discovered + invoked; the server's schema
+> validation errors round-trip correctly). **Day-3 risk found:** the local
+> qwen3.8-27b model cannot encode STRING tool arguments — it passes
+> JSON-encoded blobs (`repo = '{"repo": ...}'`), so any tool with a string
+> arg (get_repo, table_schema, execute_ddl, create_branch, write_file,
+> open_pull_request) fails validation in loops and the turn cancels. The
+> harness and MCP servers are fine (Day-0 direct probes prove the tools).
+> Task 12 MUST test tool-calling on the agent model FIRST; fallback is a
+> Cloudflare DeepSeek v4 custom provider (registered exactly like `local`).
 
 ---
 
