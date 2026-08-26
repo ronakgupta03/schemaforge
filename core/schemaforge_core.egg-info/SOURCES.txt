@@ -1,9 +1,0 @@
-pyproject.toml
-schemaforge_core/__init__.py
-schemaforge_core/models.py
-schemaforge_core.egg-info/PKG-INFO
-schemaforge_core.egg-info/SOURCES.txt
-schemaforge_core.egg-info/dependency_links.txt
-schemaforge_core.egg-info/entry_points.txt
-schemaforge_core.egg-info/requires.txt
-schemaforge_core.egg-info/top_level.txt
