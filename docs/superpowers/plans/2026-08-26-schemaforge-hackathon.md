@@ -2573,6 +2573,15 @@ cat out/graph.mmd
 app files and all three user-facing endpoints; mermaid file renders in
 mermaid.live.
 
+> Extension over the draft (implemented on Day 1): `code_facts` also records
+> intra-file function calls as `FunctionCall` facts, and `impact_graph` links
+> each endpoint to the attr/raw-SQL facts of every function it calls
+> transitively in the same file (e.g. `to_out(user: User)`). Without this the
+> demo-app's real attr accesses — all inside `to_out` — never connected to
+> `GET /users`, so `impact --tables users` missed endpoints. `impacted_by`
+> traverses the graph both ways (blast radius of changing a table includes
+> everything depending on it and everything it contains).
+
 ---
 
 # Day 2 — Aug 28 · Golden path + sandbox pipeline (Docker + Daytona CLI)
