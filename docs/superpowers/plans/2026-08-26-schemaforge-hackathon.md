@@ -2988,11 +2988,20 @@ daytona delete sf-rehearsal
   different python, no root), fix `sandbox_setup.sh` and re-run 9.5 — that
   is exactly the failure mode this step exists to catch.
 
-**Acceptance:** BOTH layers pass — a Docker container from a clean checkout
-reaches `SANDBOX_READY` and `verify` exits 0 with the golden reference, AND
-a real Daytona sandbox reaches `SANDBOX_READY` with 2 tables via the CLI.
-Wall times from 9.5 set the demo-video expectations (they are the true
-Daytona numbers, not Docker's).
+> **Day-2 rehearsal findings (2026-08-26, both layers proven):** the real
+> Daytona default image is **Debian 13 trixie, non-root `daytona` user (uid
+> 1001) with passwordless sudo, PEP 668 externally-managed python 3.14** —
+> three realities the draft script missed. `sandbox_setup.sh` now: sudo-prefixes
+> apt/service/postgres when not root (`run_postgres`: `su` as root, `sudo -u`
+> otherwise), installs when the postgres *server* is missing (not just psql),
+> and creates a venv at `$HOME/.sfenv` (bare pip is refused on PEP 668
+> systems; venv keeps alembic/pytest/pipeline on one PATH). It writes
+> `/workspace/.sfenv-activate.sh` — later shells (and the Day-3 agent) must
+> `source` it. Measured: Daytona create→ready ≈ 2s, setup (apt postgres 17 +
+> venv deps + alembic 0001 + 100k seed) ≈ 33s; snapshot lists **3 tables**
+> (`alembic_version`, `books`, `users`) — the draft's "2 tables" meant the two
+> domain tables. Docker (root) full golden sequence: all PASS; Daytona:
+> `SANDBOX_READY` + 3 tables.
 
 ## Task 10 — TrueForge connector + skill registration (no PR — config)
 
