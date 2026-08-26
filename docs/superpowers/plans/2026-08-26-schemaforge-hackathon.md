@@ -2608,7 +2608,9 @@ deterministic pipeline end-to-end.
 | alembic/versions/0002_split_users.py | data-preserving expand/backfill/contract migration |
 | app/models.py | post-split ORM models |
 | app/routers/users.py | join-based API (response shape unchanged) |
-| app/routers/reports.py | joined raw SQL |
+| tests/conftest.py | post-split test seed (User + UserProfile pairs) |
+| queries/bench.sql | post-split EXPLAIN ANALYZE queries (joined reports query) |
+| parity.sql | data-preservation assertions run by `pipeline verify` |
 | parity.sql | data-preservation assertions run by `pipeline verify` |
 ```
 
@@ -2857,8 +2859,9 @@ sleep 3
 # apply the golden outcome (copy files into the app tree)
 cp reference/post-split/alembic/versions/0002_split_users.py demo-app/alembic/versions/
 cp reference/post-split/app/models.py demo-app/app/models.py
-cp reference/post-split/app/routers/users.py demo-app/app/routers/users.py
-cp reference/post-split/app/routers/reports.py demo-app/app/routers/reports.py
+cp reference/post-split/tests/conftest.py demo-app/tests/conftest.py
+cp reference/post-split/queries/bench.sql demo-app/queries/bench.sql
+# verify
 # verify
 .vevn/bin/python -m schemaforge_core.pipeline verify \
   --dir demo-app --dsn "$DEV" --baseline out/db_before.json \
@@ -2874,9 +2877,19 @@ git checkout -- demo-app/ && rm demo-app/alembic/versions/0002_split_users.py
 - [ ] 8.8 Branch `feat/golden-reference`, PR #7 (attach `out/report_golden.md`
   in the description). Qodo → merge.
 
-**Acceptance:** golden-path `verify` exits 0 with all PASS lines; the same 6
-demo-app tests pass against the post-split code (proving the contract held);
-`main` restored to pre-split state.
+> **Day-2 deviations (2026-08-26, proven live):** the draft's reference tree and
+> copy list were missing two files that `verify` needs against post-split code —
+> `tests/conftest.py` (the pre-split seed constructs `User(address=...)`, which
+> TypeErrors post-split) and `queries/bench.sql` (the pre-split `addresses_report`
+> reads `u.address`, which no longer exists). Both now ship in
+> `reference/post-split/` and are copied in 8.7. `pipeline verify` also had a
+> robustness bug: it shelled out to `alembic`/`pytest` by bare name, which fails
+> when the venv bin is not on PATH (`.vevn/bin/python` direct invocation, or
+> sandbox agents with a minimal environment); fixed via `_tool()` resolving the
+> console scripts next to `sys.executable` (symlink-aware, no `.resolve()`).
+> Golden-path run against a 100k-user dev DB: verify EXIT=0, all three PASS
+> lines, parity all true, and `alembic downgrade 0001` restored 100k users with
+> 0 null addresses / 50k null dobs — byte-identical to the seed source.
 
 ## Task 9 — Sandbox rehearsal: Docker (script logic) + Daytona CLI (real env) (no PR — ops validation)
 
