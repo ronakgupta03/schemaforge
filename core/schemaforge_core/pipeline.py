@@ -80,6 +80,18 @@ def _load_graph(db_path: str, code_path: str):
 def _run(cmd: list[str], cwd: Path, env: dict) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=900)
 
+
+def _tool(name: str) -> str:
+    """Resolve a console script next to the running interpreter, falling back to PATH.
+
+    verify() shells out to alembic/pytest, which live in the same venv as the
+    pipeline but are not guaranteed to be on PATH (e.g. sandbox agents with a
+    minimal environment, or .vevn/bin/python invoked directly).
+    """
+    cand = Path(sys.executable).parent / name
+    return str(cand) if cand.is_file() else name
+
+
 def _test_dsn(dsn: str) -> str:
     """Append '_test' to the database name: .../bookstore -> .../bookstore_test."""
     scheme, rest = dsn.split("://", 1)
