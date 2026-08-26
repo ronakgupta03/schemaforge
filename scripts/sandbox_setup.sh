@@ -3,7 +3,9 @@
 # Sets up: postgres in-sandbox, python deps, baseline schema + 100k seed.
 set -euxo pipefail
 
-if ! command -v psql >/dev/null; then
+# Install when the client is missing OR the server is (a client-only image
+# passes `command -v psql` but has no cluster under /etc/postgresql).
+if ! command -v psql >/dev/null || [ -z "$(ls /etc/postgresql 2>/dev/null)" ]; then
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql postgresql-contrib python3-pip
 fi
@@ -33,7 +35,10 @@ su postgres -c "createdb bookstore" || true
 su postgres -c "createdb bookstore_test" || true
 
 cd /workspace
-python3 -m pip install --quiet -e core -r demo-app/requirements.txt
+# --break-system-packages: Debian/Ubuntu mark the system interpreter
+# externally-managed (PEP 668), so a bare pip install refuses. The sandbox
+# is disposable — system site-packages are fine.
+python3 -m pip install --quiet --break-system-packages -e core -r demo-app/requirements.txt
 
 export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bookstore
 export TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bookstore_test

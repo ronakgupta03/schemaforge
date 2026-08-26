@@ -16,9 +16,7 @@ import argparse
 import json
 import os
 import subprocess
-import sys
-import time
-from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from .code_facts import collect_facts
 from .db_snapshot import connect, diff_tables, snapshot
@@ -93,10 +91,15 @@ def _tool(name: str) -> str:
 
 
 def _test_dsn(dsn: str) -> str:
-    """Append '_test' to the database name: .../bookstore -> .../bookstore_test."""
-    scheme, rest = dsn.split("://", 1)
-    hostport, _, db = rest.rpartition("/")
-    return f"{scheme}://{hostport}/{db}_test"
+    """Append '_test' to the database name: .../bookstore -> .../bookstore_test.
+
+    Query/fragment suffixes survive: .../bookstore?application_name=verify
+    -> .../bookstore_test?application_name=verify.
+    """
+    p = urlsplit(dsn)
+    path = p.path.rsplit("/", 1)
+    path[-1] = f"{path[-1]}_test"
+    return urlunsplit((p.scheme, p.netloc, "/".join(path), p.query, p.fragment))
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
