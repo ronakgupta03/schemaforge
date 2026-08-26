@@ -80,12 +80,22 @@ def _load_graph(db_path: str, code_path: str):
 def _run(cmd: list[str], cwd: Path, env: dict) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=900)
 
+def _tool(name: str) -> str:
+    """Resolve a console script next to the running interpreter, falling back to PATH.
+
+    verify() shells out to alembic/pytest, which live in the same venv as the
+    pipeline but are not guaranteed to be on PATH (e.g. sandbox agents with a
+    minimal environment, or .vevn/bin/python invoked directly).
+    """
+    cand = Path(sys.executable).parent / name
+    return str(cand) if cand.is_file() else name
+
 
 def cmd_verify(args: argparse.Namespace) -> None:
     env = {**os.environ, "DATABASE_URL": args.dsn}
     dir_ = Path(args.dir)
 
-    alembic = _run(["alembic", "upgrade", "head"], dir_, env)
+    alembic = _run([_tool("alembic"), "upgrade", "head"], dir_, env)
 
     with connect(args.dsn) as conn:
         after = snapshot(conn)
@@ -104,7 +114,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 if isinstance(v, bool)
             )
 
-    pytest = _run(["pytest", "-q"], dir_, env)
+    pytest = _run([_tool("pytest"), "-q"], dir_, env)
 
     before_explain: dict[str, float] = {}
     if args.explain_before and Path(args.explain_before).exists():
