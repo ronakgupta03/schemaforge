@@ -31,7 +31,7 @@ User intent ("split users into users + user_profiles")
 │  ├── skill: schemaforge-migration (git-imported, loaded in sandbox)           │
 │  ├── MCP postgres-prod  (http://localhost:8001/mcp, our FastMCP server)       │
 │  │     read-only tools + execute_ddl [annotated destructive → approval gate]  │
-│  ├── MCP github         (http://localhost:8002/mcp, GongRzhe GitHub-MCP-Server)│
+│  ├── MCP github         (http://localhost:8002/mcp, our FastMCP server)        │
 │  │     branch/push/PR tools (NOT approval-gated — reversible)                 │
 │  └── sandbox: Daytona (Python, Postgres in-sandbox, repo checkout at          │
 │        /workspace, schemaforge_core + demo-app)                               │
@@ -83,7 +83,7 @@ GitHub MCP: push_files + create_pull_request (migration + refactored code)
 | ORM / migrations | SQLAlchemy 2.0, Alembic | Demo app + golden migration |
 | Analysis core | Python stdlib `ast` + `sqlparse` + `pg_catalog` queries | No tree-sitter (scope is Python-only) |
 | MCP (ours) | `mcp` Python SDK, `FastMCP`, streamable HTTP | `mcp-servers/postgres-mcp/server.py` |
-| MCP (GitHub) | GongRzhe `Github-MCP-Server` via `uvx`, `--transport http`, port 8002 | PAT from env |
+| MCP (GitHub) | in-repo FastMCP server (`mcp-servers/github-mcp/server.py`), port 8002 | PAT from env (header auth) |
 | Python | 3.14, repo venv `.vevn/` (uv-managed, no pip module) | install via `uv pip install --python .vevn/bin/python` |
 | Review | Qodo via GitHub integration | every PR → Qodo review → fix Highs → merge |
 
@@ -210,7 +210,10 @@ schemaforge/
 │   ├── app/routers/reports.py
 │   └── parity.sql
 ├── mcp-servers/
-│   └── postgres-mcp/
+│   ├── postgres-mcp/
+│   │   ├── requirements.txt
+│   │   └── server.py
+│   └── github-mcp/
 │       ├── requirements.txt
 │       └── server.py
 ├── skills/
@@ -680,6 +683,20 @@ echo "[github-mcp] starting on :8002 (uvx first run may take a minute)"
 GITHUB_PERSONAL_ACCESS_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:?set in .env}" \
   uvx --from git+https://github.com/GongRzhe/Github-MCP-Server \
   github-mcp-server --transport http --port 8002 &
+GH_PID=$!
+# install deps (pip when available in the venv, else uv)
+for req in mcp-servers/postgres-mcp/requirements.txt mcp-servers/github-mcp/requirements.txt; do
+  .vevn/bin/python -m pip install -q -r "$req" 2>/dev/null \
+    || uv pip install --python .vevn/bin/python -q -r "$req"
+done
+
+echo "[postgres-mcp] starting on :8001"
+.vevn/bin/python mcp-servers/postgres-mcp/server.py &
+PG_PID=$!
+
+echo "[github-mcp] starting on :8002"
+GITHUB_PERSONAL_ACCESS_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:?set in .env}" \
+  .vevn/bin/python mcp-servers/github-mcp/server.py &
 GH_PID=$!
 
 wait
@@ -3573,7 +3590,7 @@ opened by SchemaForge itself via the GitHub MCP): <what it surfaced>.
 |---|---|---|
 | Agent stalls / goes off-script mid-pipeline | Medium | Skill encodes exact commands; `reference/post-split/` is the scripted fallback (run the golden path via Code Mode manually if needed — the demo still shows every TrueForge beat); instructions say "stop and report after 2 failures" |
 | FastMCP streamable-HTTP ↔ TrueForge client mismatch | Low-Med | Task 3.6 smoke test happens on Day 0, not Day 3; fallback: `mcp-proxy` or the official `server-postgres` over HTTP |
-| `github-mcp-server` HTTP transport flags differ | Low | Verify in Task 3.6; fallback: run it under Docker, or a 30-line FastMCP GitHub server (tools: push_files, create_pull_request) in-repo |
+| External GitHub MCP server (GongRzhe) unavailable | Resolved | Repo 404'd on Day 0; replaced with in-repo FastMCP server (`mcp-servers/github-mcp/server.py`): get_repo / branch_exists / create_branch / write_file / open_pull_request |
 | Daytona sandbox missing apt/network or slow first boot | Medium | Triple-checked before the demo: Day-2 Docker rehearsal (9.2–9.3, script logic), Day-2 **Daytona CLI rehearsal (9.5, the real platform)** with recorded wall times, and the Day-3 harness dry-run (11.7); `sandbox_setup.sh` is idempotent; `daytona ssh` for live debugging |
 | EXPLAIN on prod refused by judges as "not production" | Low | README is explicit: prod = local Docker Postgres with 200k rows, owned demo data (hackathon rule: connect only what's yours); the *architecture* is what generalizes |
 | Local llama.cpp server down or too slow for the demo | Medium | Task 2.2/2.5/2.6 verify reachability, a harness smoke test, and a tok/s baseline on Day 0; if the baseline is too slow for a live 3-min video, record the live run earlier in the day and cut the video; the previous provider's models stay registered until the smoke passes |

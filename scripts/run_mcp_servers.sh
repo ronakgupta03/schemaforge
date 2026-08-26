@@ -7,17 +7,19 @@ cd "$(dirname "$0")/.."
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/bookstore}"
 
-.vevn/bin/python -m pip install -q -r mcp-servers/postgres-mcp/requirements.txt 2>/dev/null \
-  || uv pip install --python .vevn/bin/python -q -r mcp-servers/postgres-mcp/requirements.txt
+# install deps (pip when available in the venv, else uv)
+for req in mcp-servers/postgres-mcp/requirements.txt mcp-servers/github-mcp/requirements.txt; do
+  .vevn/bin/python -m pip install -q -r "$req" 2>/dev/null \
+    || uv pip install --python .vevn/bin/python -q -r "$req"
+done
 
 echo "[postgres-mcp] starting on :8001"
 .vevn/bin/python mcp-servers/postgres-mcp/server.py &
 PG_PID=$!
 
-echo "[github-mcp] starting on :8002 (uvx first run may take a minute)"
+echo "[github-mcp] starting on :8002"
 GITHUB_PERSONAL_ACCESS_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:?set in .env}" \
-  uvx --from git+https://github.com/GongRzhe/Github-MCP-Server \
-  github-mcp-server --transport http --port 8002 &
+  .vevn/bin/python mcp-servers/github-mcp/server.py &
 GH_PID=$!
 
 wait
