@@ -3,7 +3,15 @@ node_modules/
 .env.local
 .env.*.local
 dist/
+dist-test/
 build/
 coverage/
 *.log
 .DS_Store
+
+# TypeScript build info
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
