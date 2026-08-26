@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from .code_facts import collect_facts
 from .db_snapshot import connect, diff_tables, snapshot
@@ -80,6 +81,7 @@ def _load_graph(db_path: str, code_path: str):
 def _run(cmd: list[str], cwd: Path, env: dict) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=900)
 
+
 def _tool(name: str) -> str:
     """Resolve a console script next to the running interpreter, falling back to PATH.
 
@@ -91,8 +93,24 @@ def _tool(name: str) -> str:
     return str(cand) if cand.is_file() else name
 
 
+def _test_dsn(dsn: str) -> str:
+    """Append '_test' to the database name: .../bookstore -> .../bookstore_test.
+
+    Query/fragment suffixes survive: .../bookstore?application_name=verify
+    -> .../bookstore_test?application_name=verify.
+    """
+    p = urlsplit(dsn)
+    path = p.path.rsplit("/", 1)
+    path[-1] = f"{path[-1]}_test"
+    return urlunsplit((p.scheme, p.netloc, "/".join(path), p.query, p.fragment))
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
     env = {**os.environ, "DATABASE_URL": args.dsn}
+    # The app's tests force a separate test database; derive it from the DSN
+    # so the sandbox flow needs no extra env (conftest's :5434 default only
+    # matches the local host setup).
+    env.setdefault("TEST_DATABASE_URL", _test_dsn(args.dsn))
     dir_ = Path(args.dir)
 
     alembic = _run([_tool("alembic"), "upgrade", "head"], dir_, env)
