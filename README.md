@@ -16,6 +16,9 @@ TrueFoundry × Qodo) on the [TrueForge](https://trueforge.dev) agent harness.
 The exact 3-minute demo script (beats, narration, production notes):
 [`docs/demo-script.md`](docs/demo-script.md).
 
+Demo video (1080p, ≤3:00): _link added after the final take_ ·
+Submission write-up: [`docs/submission-writeup.md`](docs/submission-writeup.md).
+
 ## How it works
 
 ```
