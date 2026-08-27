@@ -3330,9 +3330,23 @@ curl -s "$TRUEFORGE_URL/api/v1/agents" | .vevn/bin/python -m json.tool | grep -A
   bridges, Code Mode) in one cheap turn. Fix any breakage on
   `fix/sandbox-rehearsal` (PR #7b) before the live run.
 
-**Acceptance:** `GET /api/v1/agents/schemaforge` returns the manifest; the
-agent appears in the TrueForge UI Agents Library; the 11.7 dry-run reaches
-`SANDBOX_READY` and reports 2 tables (users, books).
+> **Day-3 verification (2026-08-27):** all live fixes landed in PR #14
+> (feat/agent-wiring): agents are keyed by generated id (upsert = list by
+> name → PUT /agents/{id}); AgentSpec mcp_servers carry NO url (servers are
+> referenced by name); skill manifest requires `name`; import_skill.py 409
+> retry had to live INSIDE the httpx context; sandbox_setup.sh clones the
+> public repo into the empty harness sandbox (+chown of the pre-existing
+> root-owned /workspace) before provisioning. Skill registered
+> (GET /api/v1/skills → [schemaforge-migration]), agent registered.
+> **Model decision (live-tested):** qwen3.8-27b CANNOT encode string tool
+> args (get_repo/table_schema/execute_ddl all fail validation in loops →
+> cancelled turns). Cloudflare DeepSeek v4-flash registered as custom
+> provider `cloudflare` (Workers AI OpenAI-compatible base_url, models
+> deepseek-v4-flash / deepseek-v4-pro) and PROVEN: get_repo string-arg call
+> round-tripped in 15.5s (REPO=ronakgupta03/schemaforge). Agent model is now
+> `cloudflare/deepseek-v4-flash` (SCHEMAFORGE_MODEL in .env); qwen remains
+> the offline fallback. The Day-3 live run therefore uses the cloud model —
+> network dependency is the tradeoff, acceptable for the demo.
 
 ## Task 12 — LIVE end-to-end run (the demo)
 
