@@ -19,11 +19,13 @@ produce, in order:
 6. A GitHub pull request containing the migration + code changes.
 
 ## Hard rules
-- NEVER call `postgres-prod.execute_ddl` expecting it to run without the human.
-  The harness pauses that tool for approval. If the human denies, stop,
-  explain, and offer the rollback plan. Do not retry.
-- The only prod write path is `postgres-prod.execute_ddl`. All other prod
-  MCP tools are read-only; treat them that way.
+- NEVER call `postgres-prod.execute_migration` or `execute_ddl` expecting
+  them to run without the human. The harness pauses those tools for
+  approval. If the human denies, stop, explain, and offer the rollback
+  plan. Do not retry.
+- The only prod write paths are `postgres-prod.execute_migration` (full
+  migration batches) and `postgres-prod.execute_ddl` (pure DDL). All other
+  prod MCP tools are read-only; treat them that way.
 - Never put credentials, DSNs with passwords of systems you don't own, or
   tokens into code, the sandbox, or the PR.
 - Analysis = run `python -m schemaforge_core.pipeline ...` in the sandbox and
@@ -33,7 +35,10 @@ produce, in order:
 
 ## Tool inventory
 - `postgres-prod` MCP: `list_tables`, `table_schema`, `row_count`, `explain`
-  (read-only); `execute_ddl` (APPROVAL-GATED — the only irreversible step).
+  (read-only); `execute_ddl` and `execute_migration` (both APPROVAL-GATED —
+  the only irreversible steps). Use `execute_migration` for the full Alembic
+  batch (DDL + backfill + version stamping, one transaction); use
+  `execute_ddl` only for pure DDL.
 - `github` MCP: repo/branch/file/PR tools (reversible — not gated).
 - Sandbox (Code Mode): python + `schemaforge_core` + `demo-app` checkout at
   `/workspace`; you run alembic/pytest/psql there.
@@ -77,7 +82,8 @@ returns only what IT can produce on its own (db facts, or code facts). Back
 in the root, you merge: write `out/db.json` from the db-analysis JSON, write
 `out/code.json` from the code-analysis JSON, then run
 `pipeline graph --db out/db.json --code out/code.json --out out/graph.json
---mermaid out/graph.mmd` and `pipeline impact --tables <changed tables>`
+--mermaid out/graph.mmd` and
+`pipeline impact --db out/db.json --code out/code.json --tables <changed tables>`
 yourself, and present the mermaid graph to the user.
 
 ## Workflow (mirror of the skill — order matters)
@@ -94,8 +100,9 @@ yourself, and present the mermaid graph to the user.
    data-preservation invariants of the specific change).
 6. Present the safety report (markdown) and STOP. Wait for the user.
 7. On approval: generate the exact SQL with
-   `cd demo-app && alembic upgrade head --sql` (in the sandbox), then call
-   `postgres-prod.execute_ddl` with that SQL.
+   `cd demo-app && alembic upgrade 0001:head --sql` (in the sandbox — the
+   `0001:head` range applies only the new revision; prod is already stamped
+   at 0001), then call `postgres-prod.execute_migration` with that SQL.
 8. Open the GitHub PR: push the modified files (migration + code) to a new
    branch `schemaforge/<slug>` via the github MCP and create the PR with a
    description that embeds the safety report and the impact graph.

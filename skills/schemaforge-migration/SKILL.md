@@ -10,8 +10,9 @@ Any user request to change the Postgres schema of `demo-app`
 (add/split/drop/rename columns or tables).
 
 ## Invariants
-1. Production is never written except via `postgres-prod.execute_ddl`, which
-   the harness pauses for human approval.
+1. Production is never written except via `postgres-prod.execute_migration`
+   (full batches) or `postgres-prod.execute_ddl` (pure DDL), which the
+   harness pauses for human approval.
 2. All analysis is deterministic: `schemaforge_core` (sandbox) — never
    eyeballed parsing.
 3. Tests in `demo-app/tests/` are the API contract; never edit them.
@@ -49,8 +50,9 @@ Any user request to change the Postgres schema of `demo-app`
    statements with `time.perf_counter()` in a Code Mode script; report
    "DDL took X ms on 100k rows (sandbox)".
 9. Present `out/report.md` in chat and STOP — wait for the user's approval.
-10. On approval: `cd demo-app && alembic upgrade head --sql` (sandbox) →
-    `postgres-prod.execute_ddl(<that SQL>)`. Verify with `table_schema` +
-    `row_count` after it returns.
+10. On approval: `cd demo-app && alembic upgrade 0001:head --sql` (sandbox;
+    `0001:head` applies only the new revision — prod is already at 0001) →
+    `postgres-prod.execute_migration(<that SQL>)`. Verify with `table_schema`
+    + `row_count` after it returns.
 11. PR: github MCP → push modified files to branch `schemaforge/<slug>` →
     create PR (body = safety report + impact mermaid).

@@ -3347,6 +3347,19 @@ curl -s "$TRUEFORGE_URL/api/v1/agents" | .vevn/bin/python -m json.tool | grep -A
 > `cloudflare/deepseek-v4-flash` (SCHEMAFORGE_MODEL in .env); qwen remains
 > the offline fallback. The Day-3 live run therefore uses the cloud model —
 > network dependency is the tradeoff, acceptable for the demo.
+> **Qodo re-review fixes (PR #14, all resolved):** (1) sandbox_setup.sh
+> run_postgres() restored after an edit regression; (2) impact command in
+> instructions.md now passes --db/--code (was --tables only); (3+5) NEW
+> `execute_migration` tool in postgres-mcp — accepts the full Alembic batch
+> (DDL + backfill INSERT..SELECT + alembic_version stamping, BEGIN/COMMIT
+> framing stripped) and runs it in ONE transaction with rollback on failure
+> (live-proven: apply 5 stmts → 5 profiles/version 0002; failing stmt 6/6 →
+> zero partial state); execute_ddl stays DDL-only; (4) approval SQL now
+> `alembic upgrade 0001:head --sql` (offline head:head replays baseline —
+> prod is stamped at 0001); (6) table_schema enriched to the engine's exact
+> snapshot shape (columns with default, indexes, foreign_keys) so the
+> db-analysis subagent can write db.json verbatim. All 6 tools live via
+> TrueForge passthrough.
 
 ## Task 12 — LIVE end-to-end run (the demo)
 
