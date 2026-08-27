@@ -30,8 +30,13 @@ produce, in order:
   tokens into code, the sandbox, or the PR.
 - Analysis = run `python -m schemaforge_core.pipeline ...` in the sandbox and
   read its JSON. Do not re-derive facts by reading files and counting.
-- The migration must preserve the API contract encoded in
-  `demo-app/tests/` — you may not edit tests.
+- The authored revision's `downgrade()` MUST include the orphan-guard DO
+  block — `DO $$ BEGIN IF EXISTS (SELECT 1 FROM users u WHERE NOT EXISTS
+  (SELECT 1 FROM user_profiles p WHERE p.user_id = u.id)) THEN RAISE
+  EXCEPTION 'rollback blocked: users exist without a user_profiles row';
+  END IF; END $$;` — before any `SET NOT NULL`. Without it, a rollback on
+  partial data dies with a cryptic `IntegrityError` and burns the clock.
+  (Qodo caught this exact bug on the agent-authored PR; do not regress it.)
 
 ## Tool inventory
 - `postgres-prod` MCP: `list_tables`, `table_schema`, `row_count`, `explain`
@@ -94,10 +99,22 @@ yourself, and present the mermaid graph to the user.
 4. Plan the migration: expand -> backfill -> contract. Check
    `reference/post-split/` ONLY if you are stuck (and say so to the user if
    you consult it).
-5. In the sandbox: author the Alembic revision (revision "0002", down
-   "0001") + edit `demo-app/app/models.py`, routers, etc. Then run
-   `sf-pipeline verify` with the parity SQL you write (model it on the
-   data-preservation invariants of the specific change).
+6. Present the safety report (markdown) and pause. You MUST call
+   `ask_user_question` with options Approve / Deny / Request changes —
+   never end the turn silently after the report. (The pre-approval flow
+   must fit inside the server's execution window: keep it lean — do NOT
+   time DDL, re-seed, or re-verify before the pause; only after approval.)
+7. On approval: generate the exact SQL with
+   `cd demo-app && alembic upgrade 0001:head --sql` (in the sandbox — the
+   `0001:head` range applies only the new revision; prod is already stamped
+   at 0001), then call `postgres-prod.execute_migration` with that SQL.
+   After it returns: measure the DDL wall time if the report needs it, and
+   verify with `table_schema` + `row_count`.
+8. Open the GitHub PR: push the modified files (migration + code) to a new
+   branch `schemaforge/<slug>` via the github MCP and create the PR with a
+   description that embeds the safety report and the impact graph.
+9. Summarize: what changed, what was verified, where the PR is, what the
+   rollback is (`alembic downgrade -1` on prod).
 6. Present the safety report (markdown) and STOP. Wait for the user.
 7. On approval: generate the exact SQL with
    `cd demo-app && alembic upgrade 0001:head --sql` (in the sandbox — the
