@@ -19,6 +19,12 @@ The exact 3-minute demo script (beats, narration, production notes):
 Demo video (1080p, ≤3:00): _link added after the final take_ ·
 Submission write-up: [`docs/submission-writeup.md`](docs/submission-writeup.md).
 
+> The built-in TrueForge UI does not render `mermaid` code blocks by
+> default (it only syntax-highlights them). If you are running the local
+> UI, run `python scripts/patch-trueforge-mermaid.py` once to inject the
+> mermaid runtime into the served frontend (idempotent; re-run after any
+> `npx` re-fetch). Verified: impact-graph mermaid blocks render as SVG.
+
 ## How it works
 
 ```
