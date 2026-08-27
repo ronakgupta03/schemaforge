@@ -49,21 +49,54 @@ def _check_ident(name: str) -> None:
         raise ValueError(f"invalid identifier: {name!r}")
 
 def _split_statements(sql: str) -> list[str]:
-    """Split on ';' outside single-quoted literals ('' is an escaped quote)."""
+    """Split on ';' outside quoted literals.
+
+    Honors single-quoted strings ('...', with '' as an escaped quote) and
+    PostgreSQL dollar-quoted bodies ($tag$...$tag$ and $$...$$), so a
+    semicolon inside a string constant or function body never fragments
+    the batch.
+    """
     parts: list[str] = []
-    cur: list[str] = []
+    start = 0
+    i, n = 0, len(sql)
     in_str = False
-    for ch in sql:
+    dollar_tag: str | None = None
+    while i < n:
+        if dollar_tag is not None:
+            if sql.startswith(dollar_tag, i):
+                tag = dollar_tag
+                dollar_tag = None
+                i += len(tag)
+            else:
+                i += 1
+            continue
+        ch = sql[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    i += 2  # escaped quote inside the literal
+                    continue
+                in_str = False
+            i += 1
+            continue
         if ch == "'":
-            in_str = not in_str
-            cur.append(ch)
-        elif ch == ";" and not in_str:
-            parts.append("".join(cur))
-            cur = []
+            in_str = True
+            i += 1
+        elif ch == "$":
+            m = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", sql[i:])
+            if m:
+                dollar_tag = m.group(0)
+                i += len(dollar_tag)
+            else:
+                i += 1
+        elif ch == ";":
+            parts.append(sql[start:i].strip())
+            i += 1
+            start = i
         else:
-            cur.append(ch)
-    parts.append("".join(cur))
-    return [p for p in parts if p.strip()]
+            i += 1
+    parts.append(sql[start:].strip())
+    return [p for p in parts if p]
 
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
