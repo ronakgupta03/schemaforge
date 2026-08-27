@@ -129,7 +129,6 @@ def table_schema(table: str) -> dict:
             "JOIN pg_class t ON t.oid = ix.indrelid "
             "JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) "
             "WHERE t.relname = %s AND t.relnamespace = 'public'::regnamespace "
-            "AND NOT ix.indisprimary "
             "GROUP BY i.relname, ix.indisunique ORDER BY i.relname",
             (table,),
         ).fetchall()
