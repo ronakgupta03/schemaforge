@@ -5,4 +5,4 @@ SELECT id, name, email FROM users WHERE email = 'user1@example.com';
 SELECT id, name FROM users ORDER BY id DESC LIMIT 20;
 
 -- name: addresses_report
-SELECT u.name, p.address FROM users u JOIN user_profiles p ON p.user_id = u.id ORDER BY u.id LIMIT 20;
+SELECT u.name, u.address FROM users u ORDER BY u.id LIMIT 20;
