@@ -40,6 +40,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Qodo finding (agent PR #15, same latent edge here): a user without a
+    # user_profiles row would leave address NULL and the NOT NULL alteration
+    # below would fail. Reject rollback explicitly instead of fabricating data.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM users u
+                LEFT JOIN user_profiles p ON p.user_id = u.id
+                WHERE p.id IS NULL
+            ) THEN
+                RAISE EXCEPTION 'rollback blocked: users exist without a user_profiles row';
+            END IF;
+        END $$;
+        """
+    )
     op.add_column("users", sa.Column("address", sa.String(length=255), nullable=True))
     op.add_column("users", sa.Column("date_of_birth", sa.String(length=10), nullable=True))
     op.execute(
