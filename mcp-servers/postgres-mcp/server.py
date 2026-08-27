@@ -48,13 +48,22 @@ def _check_ident(name: str) -> None:
     if not _IDENT.match(name):
         raise ValueError(f"invalid identifier: {name!r}")
 
-def _split_statements(sql: str) -> list[str]:
-    """Split on ';' outside quoted literals.
+def _skip_sql_comment(sql: str, i: int, n: int) -> int:
+    """Advance past a -- line comment or /* */ block comment at sql[i:]."""
+    if sql.startswith("--", i):
+        j = sql.find("\n", i)
+        return n if j == -1 else j  # keep the newline (statement separator)
+    j = sql.find("*/", i + 2)
+    return n if j == -1 else j + 2
 
-    Honors single-quoted strings ('...', with '' as an escaped quote) and
-    PostgreSQL dollar-quoted bodies ($tag$...$tag$ and $$...$$), so a
-    semicolon inside a string constant or function body never fragments
-    the batch.
+
+def _split_statements(sql: str) -> list[str]:
+    """Split on ';' outside quoted literals and comments.
+
+    Honors single-quoted strings ('...', with '' as an escaped quote),
+    PostgreSQL dollar-quoted bodies ($tag$...$tag$ and $$...$$), -- line
+    comments, and /* */ block comments, so a semicolon inside any of those
+    never fragments the batch.
     """
     parts: list[str] = []
     start = 0
@@ -89,6 +98,8 @@ def _split_statements(sql: str) -> list[str]:
                 i += len(dollar_tag)
             else:
                 i += 1
+        elif sql.startswith("--", i) or sql.startswith("/*", i):
+            i = _skip_sql_comment(sql, i, n)
         elif ch == ";":
             parts.append(sql[start:i].strip())
             i += 1
@@ -190,9 +201,10 @@ def explain(sql: str) -> str:
 )
 def execute_ddl(sql: str) -> str:
     """Run a DDL statement or semicolon-separated DDL batch against prod."""
-    if _FORBIDDEN.search(sql):
+    clean = _strip_sql_comments(sql)
+    if _FORBIDDEN.search(clean):
         raise ValueError("only DDL is allowed here (no SELECT/INSERT/UPDATE/DELETE/COPY)")
-    statements = _split_statements(sql)
+    statements = _split_statements(clean)
     if not statements:
         raise ValueError("empty DDL batch")
     for stmt in statements:
@@ -204,19 +216,39 @@ def execute_ddl(sql: str) -> str:
     return f"executed {len(statements)} DDL statement(s) against prod"
 
 
-def _strip_comments(statement: str) -> str:
-    """Drop leading Alembic comment lines (-- Running upgrade ...) from a chunk."""
-    return "\n".join(
-        line for line in statement.splitlines() if not line.lstrip().startswith("--")
-    ).strip()
+def _strip_sql_comments(statement: str) -> str:
+    """Remove -- line and /* */ block comments (never inside quoted literals)."""
+    out: list[str] = []
+    i, n = 0, len(statement)
+    in_str = False
+    while i < n:
+        ch = statement[i]
+        if in_str:
+            out.append(ch)
+            if ch == "'":
+                if i + 1 < n and statement[i + 1] == "'":
+                    out.append("'")
+                    i += 2
+                    continue
+                in_str = False
+            i += 1
+            continue
+        if ch == "'":
+            in_str = True
+            out.append(ch)
+            i += 1
+        elif statement.startswith("--", i) or statement.startswith("/*", i):
+            i = _skip_sql_comment(statement, i, n)
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _validate_migration_statement(statement: str) -> None:
-    stmt = _strip_comments(statement)
+    stmt = _strip_sql_comments(statement)
     if not stmt:
         raise ValueError("empty statement in migration batch")
-    if ";" in stmt:
-        raise ValueError("statement contains a semicolon — split it first")
     if _MIGRATION_VERB.match(stmt):
         return
     m = _INSERT_INTO.match(stmt)
@@ -246,7 +278,7 @@ def execute_migration(sql: str) -> str:
     # Alembic's offline output frames the batch with BEGIN/COMMIT; the tool
     # runs its own single transaction, so the framing is dropped.
     statements = [
-        s for s in statements if not _TRANSACTION_FRAME.match(_strip_comments(s))
+        s for s in statements if not _TRANSACTION_FRAME.match(_strip_sql_comments(s))
     ]
     if not statements:
         raise ValueError("migration batch contains only transaction framing")
@@ -255,7 +287,7 @@ def execute_migration(sql: str) -> str:
     with psycopg.connect(DSN, row_factory=dict_row, autocommit=False) as conn:
         try:
             for i, stmt in enumerate(statements, 1):
-                conn.execute(_strip_comments(stmt))
+                conn.execute(_strip_sql_comments(stmt))
             conn.commit()
         except Exception as exc:
             conn.rollback()
