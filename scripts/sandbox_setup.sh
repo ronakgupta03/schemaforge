@@ -14,13 +14,18 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Run a command as the postgres user: su (root) or sudo -u (non-root).
-run_postgres() {
-    if [ -z "$SUDO" ]; then
-        su postgres -c "$1"
-    else
-        $SUDO -u postgres bash -lc "$1"
+# The TrueForge-provisioned sandbox starts EMPTY: put the repo at /workspace
+# when absent (idempotent for re-runs). /workspace may pre-exist root-owned.
+if [ ! -d /workspace/.git ]; then
+    if [ -n "$(ls -A /workspace 2>/dev/null)" ]; then
+        echo "/workspace exists, is not empty, and has no .git — aborting" >&2
+        exit 1
     fi
-}
+    $SUDO chown "$(id -u):$(id -g)" /workspace
+    git clone --depth 1 https://github.com/ronakgupta03/schemaforge.git /workspace
+fi
+
+# Install when the client is missing OR the server is (a client-only image
 
 # Install when the client is missing OR the server is (a client-only image
 # passes `command -v psql` but has no cluster under /etc/postgresql).
