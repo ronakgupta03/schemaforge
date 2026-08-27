@@ -48,6 +48,23 @@ def _check_ident(name: str) -> None:
     if not _IDENT.match(name):
         raise ValueError(f"invalid identifier: {name!r}")
 
+def _split_statements(sql: str) -> list[str]:
+    """Split on ';' outside single-quoted literals ('' is an escaped quote)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    in_str = False
+    for ch in sql:
+        if ch == "'":
+            in_str = not in_str
+            cur.append(ch)
+        elif ch == ";" and not in_str:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return [p for p in parts if p.strip()]
+
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
 def list_tables() -> list[str]:
@@ -78,7 +95,8 @@ def table_schema(table: str) -> dict:
             "FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid "
             "JOIN pg_class t ON t.oid = ix.indrelid "
             "JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) "
-            "WHERE t.relname = %s AND NOT ix.indisprimary "
+            "WHERE t.relname = %s AND t.relnamespace = 'public'::regnamespace "
+            "AND NOT ix.indisprimary "
             "GROUP BY i.relname, ix.indisunique ORDER BY i.relname",
             (table,),
         ).fetchall()
@@ -90,7 +108,8 @@ def table_schema(table: str) -> dict:
             "  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "
             "JOIN information_schema.constraint_column_usage ccu "
             "  ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema "
-            "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = %s",
+            "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' "
+            "AND tc.table_name = %s",
             (table,),
         ).fetchall()
     return {
@@ -141,7 +160,7 @@ def execute_ddl(sql: str) -> str:
     """Run a DDL statement or semicolon-separated DDL batch against prod."""
     if _FORBIDDEN.search(sql):
         raise ValueError("only DDL is allowed here (no SELECT/INSERT/UPDATE/DELETE/COPY)")
-    statements = [s for s in sql.split(";") if s.strip()]
+    statements = _split_statements(sql)
     if not statements:
         raise ValueError("empty DDL batch")
     for stmt in statements:
@@ -189,7 +208,7 @@ def _validate_migration_statement(statement: str) -> None:
 )
 def execute_migration(sql: str) -> str:
     """Run an `alembic upgrade 0001:head --sql` batch on prod, atomically."""
-    statements = [s for s in sql.split(";") if s.strip()]
+    statements = _split_statements(sql)
     if not statements:
         raise ValueError("empty migration batch")
     # Alembic's offline output frames the batch with BEGIN/COMMIT; the tool
