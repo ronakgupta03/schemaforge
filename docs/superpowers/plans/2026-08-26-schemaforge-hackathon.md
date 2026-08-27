@@ -3360,6 +3360,21 @@ curl -s "$TRUEFORGE_URL/api/v1/agents" | .vevn/bin/python -m json.tool | grep -A
 > snapshot shape (columns with default, indexes, foreign_keys) so the
 > db-analysis subagent can write db.json verbatim. All 6 tools live via
 > TrueForge passthrough.
+> **Qodo rounds 2-4 (PR #14):** "SQL literals are split" → `_split_statements`
+> scanner now honors single-quoted strings ('' escapes) AND PostgreSQL
+> dollar-quoted bodies ($tag$...$tag$, $$...$$); "Indexes cross schema
+> boundaries" → index/FK queries schema-qualified to 'public';
+> "Primary keys disappear" → index query no longer filters indisprimary so
+> table_schema matches the engine snapshot (users_pkey present). Final
+> verdict: Bugs 0 / violations 0 / gaps 0. PR #14 merged as 785c327.
+> **11.7 dry-run PASSED (live):** throwaway session on the schemaforge agent
+> (cloudflare/deepseek-v4-flash) booted the sandbox end-to-end — clone of
+> the public repo into /workspace, sandbox_setup.sh (SANDBOX_READY, seed
+> 100000/1000), then `sf-pipeline snapshot --dsn $DATABASE_URL` → out/db.json
+> with 3 tables (users 100000, books 1000, alembic_version 1); agent
+> reported counts and correctly flagged the -1 reltuples placeholders.
+> CLI-name fix: docs now say `sf-pipeline` (console script name), not bare
+> `pipeline`. Sandbox auto-stopped after idle; deleted to avoid idle billing.
 
 ## Task 12 — LIVE end-to-end run (the demo)
 
