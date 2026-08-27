@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
-from ..models import User
+from ..models import User, UserProfile
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -56,7 +56,8 @@ def get_user(user_id: int, db: Session = Depends(get_db)):
 
 @router.post("", response_model=UserOut, status_code=201)
 def create_user(payload: UserIn, db: Session = Depends(get_db)):
-    user = User(**payload.model_dump())
+    user = User(name=payload.name, email=payload.email)
+    user.profile = UserProfile(address=payload.address, date_of_birth=payload.date_of_birth)
     db.add(user)
     db.commit()
     db.refresh(user)
