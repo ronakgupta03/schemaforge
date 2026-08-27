@@ -70,17 +70,32 @@ explains — it never guesses about code or schema.
   rolls back to zero partial state. It accepts DDL verbs, data-preserving
   `INSERT … SELECT` backfills, and `alembic_version` bookkeeping; it
   rejects data-table `UPDATE`/`DELETE`/`COPY` and arbitrary `SELECT`.
-- **Proven before approval.** Migration, data parity, application tests,
-  and EXPLAIN ANALYZE all run in the sandbox first; the safety report must
-  be PASS/PASS/PASS before the gate opens.
-- **Rollback is real.** Every revision ships a `downgrade()`; rollback is
-  blocked with a clear error if it would fabricate or lose data.
+- **Proven before approval (workflow-enforced).** Migration, data parity,
+  application tests, and EXPLAIN ANALYZE all run in the sandbox first, and
+  the workflow requires PASS/PASS/PASS before the agent requests approval.
+  The *mechanical* gate is the `destructiveHint` annotation on the write
+  tools — the harness pauses for a human regardless of what the model did
+  or claimed.
+- **Backfills cannot duplicate data.** `INSERT … SELECT` is accepted only
+  for tables created by the migration itself — a backfill targeting an
+  already-existing table is rejected and rolled back.
+- **Rollback is real.** The split migration's `downgrade()` is guarded: it
+  is blocked with a clear error if any user lacks a profile row, rather
+  than fabricating data. (The baseline revision 0001's downgrade is
+  destructive by design — it drops the initial schema.)
 - **Reversible GitHub actions.** PR/branch creation carries no approval
   requirement — merging is still a human action.
 
 ## Run it
 
 ```bash
+# 0. One-time environment (creates the .vevn venv the scripts use)
+uv venv .vevn                                     # Python 3.14, uv
+uv pip install --python .vevn/bin/python -e core
+uv pip install --python .vevn/bin/python -r demo-app/requirements.txt
+uv pip install --python .vevn/bin/python -r mcp-servers/postgres-mcp/requirements.txt
+uv pip install --python .vevn/bin/python -r mcp-servers/github-mcp/requirements.txt
+
 # 1. Services
 bash scripts/run_mcp_servers.sh      # postgres-mcp :8001, github-mcp :8002
 npx @truefoundry/trueforge           # harness on [::1]:8790 (SQLite local mode)
@@ -99,10 +114,12 @@ bash scripts/seed_prod.sh
 #    name, email. The API response shape of /users must not change."
 ```
 
-Environment: `TRUEFORGE_URL`, `DATABASE_URL` (prod), `POSTGRES_MCP_URL`,
-`GITHUB_MCP_URL`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `DAYTONA_API_KEY`,
-`SCHEMAFORGE_MODEL` — copy `.env.example` (see also `~/.zshrc` for
-Cloudflare creds if using the cloud model).
+Environment (copy `.env.example`): `TRUEFORGE_URL` (use
+`http://[::1]:8790` for API clients — local mode binds IPv6 loopback),
+`DATABASE_URL` (prod), `POSTGRES_MCP_URL`, `GITHUB_MCP_URL`,
+`GITHUB_PERSONAL_ACCESS_TOKEN`, `GITHUB_REPO_URL` (used by
+`import_skill.py`), `DAYTONA_API_KEY`, `SCHEMAFORGE_MODEL` (default
+`cloudflare/deepseek-v4-flash`; Cloudflare creds in `~/.zshrc`).
 
 ## Qodo Code Review Evidence
 
@@ -111,8 +128,8 @@ Qodo** before merge (direct pushes are docs-only). Representative PRs:
 
 ### PR #14 — Root agent wiring (`feat/agent-wiring`, merged `785c327`)
 
-Qodo surfaced **8 findings across 4 review rounds**; each was fixed and
-re-reviewed to **Bugs 0**:
+Qodo surfaced **9 findings across 4 review rounds** (6 initial + 3 from
+re-reviews); each was fixed and re-reviewed to **Bugs 0**:
 
 | Finding (severity) | What Qodo caught | Resolution |
 |---|---|---|
@@ -123,6 +140,7 @@ re-reviewed to **Bugs 0**:
 | DDL batches can partially apply (High) | non-atomic multi-statement apply | Single transaction, rollback live-proven (failing stmt → zero partial state) |
 | Snapshot fields unavailable (Medium) | `table_schema` lacked defaults/indexes/FKs | Enriched to the engine's exact snapshot shape |
 | SQL literals split on `;` (High) | naive `split(";")` fragments strings | Comment/dollar-quote-aware `_split_statements` scanner |
+| Indexes cross schema boundaries (Medium) | index/FK queries unqualified by schema | Schema-qualified to `'public'` (`relnamespace`, `table_schema`) |
 | Primary keys disappear (High) | `ix.indisprimary` filtered out PK indexes | Removed filter; `users_pkey` present in `indexes` |
 
 ### PR #12 — Sandbox rehearsal (`feat/sandbox-rehearsal`, merged `7a3a739`)

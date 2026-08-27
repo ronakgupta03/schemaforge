@@ -254,11 +254,24 @@ def _validate_migration_statement(statement: str) -> None:
     m = _INSERT_INTO.match(stmt)
     if m:
         target = m.group(1).lower()
-        if target == "alembic_version" or re.search(r"\bSELECT\b", stmt, re.IGNORECASE):
-            return  # version stamping or data-preserving backfill
+        if target == "alembic_version":
+            return  # Alembic version bookkeeping
+        if re.search(r"\bSELECT\b", stmt, re.IGNORECASE):
+            return  # data backfill — target existence is checked at apply time
     if _UPDATE_ALEMBIC.match(stmt):
         return  # Alembic version bookkeeping only
     raise ValueError(f"statement not allowed by execute_migration: {stmt[:80]!r}")
+
+
+def _existing_tables(conn: psycopg.Connection) -> set[str]:
+    """Tables that exist in prod BEFORE this migration runs."""
+    return {
+        r["table_name"]
+        for r in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+        )
+    }
 
 
 @mcp.tool(
@@ -285,9 +298,19 @@ def execute_migration(sql: str) -> str:
     for stmt in statements:
         _validate_migration_statement(stmt)
     with psycopg.connect(DSN, row_factory=dict_row, autocommit=False) as conn:
+        pre = _existing_tables(conn)
         try:
             for i, stmt in enumerate(statements, 1):
-                conn.execute(_strip_sql_comments(stmt))
+                clean = _strip_sql_comments(stmt)
+                m = _INSERT_INTO.match(clean)
+                if m:
+                    target = m.group(1).lower()
+                    if target != "alembic_version" and target in pre:
+                        raise ValueError(
+                            f"backfill target {target!r} already exists — INSERT..SELECT "
+                            "may only populate tables created by this migration"
+                        )
+                conn.execute(clean)
             conn.commit()
         except Exception as exc:
             conn.rollback()
