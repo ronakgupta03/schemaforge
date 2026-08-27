@@ -37,13 +37,13 @@ Any user request to change the Postgres schema of `demo-app`
    `python -m schemaforge_core.pipeline graph --db out/db.json --code out/code.json --out out/graph.json --mermaid out/graph.mmd`
    `python -m schemaforge_core.pipeline impact --db out/db.json --code out/code.json --tables <changed>`
    Show the mermaid to the user.
-5. Baseline: `pipeline snapshot --dsn $DATABASE_URL --out out/db_before.json`
-   and `pipeline bench --dsn $DATABASE_URL --queries demo-app/queries/bench.sql --out out/explain_before.json`
+5. Baseline: `sf-pipeline snapshot --dsn $DATABASE_URL --out out/db_before.json`
+   and `sf-pipeline bench --dsn $DATABASE_URL --queries demo-app/queries/bench.sql --out out/explain_before.json`
    (run against the SANDBOX dsn — the sandbox DB mirrors prod's pre-migration state).
 6. Author the migration in `/workspace/demo-app`: new alembic revision
    (0002) + code edits. Write a parity SQL file for THIS change.
 7. Verify:
-   `pipeline verify --dir demo-app --dsn $DATABASE_URL --baseline out/db_before.json --parity-sql <your parity file> --queries demo-app/queries/bench.sql --explain-before out/explain_before.json --out out/report.md`
+   `sf-pipeline verify --dir demo-app --dsn $DATABASE_URL --baseline out/db_before.json --parity-sql <your parity file> --queries demo-app/queries/bench.sql --explain-before out/explain_before.json --out out/report.md`
    Exit 0 + all PASS is required before step 8.
 8. Measure DDL wall time in the sandbox (for the report's lock estimate):
    time the `alembic upgrade head` on a re-seeded copy, or wrap the DDL

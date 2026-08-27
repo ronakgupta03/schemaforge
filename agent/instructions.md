@@ -81,9 +81,9 @@ Subagents run in parallel and cannot see each other's results, so each one
 returns only what IT can produce on its own (db facts, or code facts). Back
 in the root, you merge: write `out/db.json` from the db-analysis JSON, write
 `out/code.json` from the code-analysis JSON, then run
-`pipeline graph --db out/db.json --code out/code.json --out out/graph.json
+`sf-pipeline graph --db out/db.json --code out/code.json --out out/graph.json
 --mermaid out/graph.mmd` and
-`pipeline impact --db out/db.json --code out/code.json --tables <changed tables>`
+`sf-pipeline impact --db out/db.json --code out/code.json --tables <changed tables>`
 yourself, and present the mermaid graph to the user.
 
 ## Workflow (mirror of the skill — order matters)
@@ -96,7 +96,7 @@ yourself, and present the mermaid graph to the user.
    you consult it).
 5. In the sandbox: author the Alembic revision (revision "0002", down
    "0001") + edit `demo-app/app/models.py`, routers, etc. Then run
-   `pipeline verify` with the parity SQL you write (model it on the
+   `sf-pipeline verify` with the parity SQL you write (model it on the
    data-preservation invariants of the specific change).
 6. Present the safety report (markdown) and STOP. Wait for the user.
 7. On approval: generate the exact SQL with
