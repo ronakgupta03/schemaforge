@@ -3441,6 +3441,48 @@ The API response shape of /users must not change.
 across ≤3 sessions with fixes in between, and ONE clean session recorded for
 the video). The PR exists. Prod DB is post-split with 200k rows intact.
 
+> **Day-3 verification (2026-08-27) — Task 12 LIVE run PASSED end-to-end in
+> ONE session** (session 01m120emd…, turns chained through apply + PR):
+> all 12.3 beats observed — skill loaded; **two parallel subagents**
+> (thread.created ×2: db-analysis did prod introspection via postgres-prod
+> list_tables/table_schema×3/row_count×3/EXPLAIN×3, code-analysis ran
+> `sf-pipeline facts`); root merged → impact graph **26 nodes / 43 edges +
+> mermaid**; baseline snapshot + EXPLAIN-before; authored 0002 migration +
+> models/routers with a **DO-block parity guard** and ORM smoke test;
+> `sf-pipeline verify` **migration PASS / tests PASS / parity PASS**; DDL
+> wall time **1052.6 ms on 100k rows**; **approval gate fired 3×**
+> (ask_user_question, then execute_migration paused twice —
+> `tool.approval_required`); apply = **"applied 5 migration statement(s) in
+> one transaction"**; post-apply verification (row_count 200k = 200k,
+> table_schema FK/UNIQUE); github MCP (deferred, via call_tool) created
+> branch `schemaforge/split-users` + pushed 4 files + **opened PR #15**.
+> **Iterations consumed:** 1 pre-approval run + 1 approval resume + 1
+> retry (429-rate-limit recovery, comment-aware batch fix) — well inside
+> the 3-4 budget. **Model:** cloudflare/deepseek-v4-flash throughout.
+> **12.4 Qodo evidence #2 (agent-created PR #15):** Qodo surfaced ONE bug —
+> "Profileless users block rollback" (downgrade join leaves address NULL for
+> users without a profile, then NOT NULL fails). Fixed by adding an
+> orphan-guard DO block to the downgrade (verified live: orphan → rollback
+> blocked at 0002; full data → clean downgrade, 0 NULLs); the golden
+> reference 0002 had the same latent edge and received the same guard.
+> Qodo re-review: **Bugs 0**. Merged as 2857075, then demo-app **reverted
+> to pre-split on main** (PR #16) so the sandbox baseline stays 0001 — the
+> post-split outcome lives in reference/post-split/ + PR #15's diff.
+> **12.5 diff vs reference:** reports.py byte-identical; migration
+> equivalent (agent adds DO parity guard); models.py a superset
+> (association_proxy + lazy="selectin"); bench.sql identical (± newline).
+> **12.6 reconnect:** trueforge process restarted — session + turn history
+> survive (SQLite), a RECONNECT_OK turn chained cleanly afterwards.
+> **12.7 generative UI:** local-mode UI renders markdown (headings, code
+> blocks) natively; mermaid NOT rendered inline — fallback confirmed:
+> agent saves graph.mmd + report.md in the sandbox (file_downloads on),
+> the model references them in its summary. Engine fixes discovered by the
+> live run (in PR #14 / main): comment-aware statement splitter (-- and
+> /* */ plus dollar-quotes; a ';' inside a string literal is legal and now
+> accepted), comment stripping in execute_ddl, seed_prod.sh subshell-cd
+> bug. Prod left POST-split (200k/200k, version 0002) as evidence; reset
+> pre-split before each demo recording.
+
 ## Task 13 — Demo script + rehearsal (no PR)
 
 - [ ] 13.1 Write `docs/demo-script.md` — the exact 3-minute script:
