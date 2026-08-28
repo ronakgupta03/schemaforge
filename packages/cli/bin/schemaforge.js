@@ -3,7 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
-import { createReadStream, existsSync, statSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, statSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -405,11 +405,11 @@ function getProxyTarget(urlPath) {
   const query = search ? `?${search}` : "";
 
   if (pathname === "/api/sf/config/postgres-mcp" || pathname.startsWith("/api/sf/config/postgres-mcp/")) {
-    const subpath = pathname.slice("/api/sf/config/postgres-mcp".length) || "";
+    const subpath = pathname.slice("/api/sf/config/postgres-mcp".length) || "/config";
     return {
       host: "127.0.0.1",
       port: Number(pgConfigPort),
-      path: (subpath || "/config") + query,
+      path: subpath + query,
       headers: {
         Authorization: `Bearer ${configToken}`,
       },
@@ -417,11 +417,11 @@ function getProxyTarget(urlPath) {
   }
 
   if (pathname === "/api/sf/config/github-mcp" || pathname.startsWith("/api/sf/config/github-mcp/")) {
-    const subpath = pathname.slice("/api/sf/config/github-mcp".length) || "";
+    const subpath = pathname.slice("/api/sf/config/github-mcp".length) || "/config";
     return {
       host: "127.0.0.1",
       port: Number(ghConfigPort),
-      path: (subpath || "/config") + query,
+      path: subpath + query,
       headers: {
         Authorization: `Bearer ${configToken}`,
       },
@@ -466,7 +466,29 @@ const MIME = {
 };
 
 server = createServer((req, res) => {
-  const target = getProxyTarget(req.url || "/");
+  const reqUrl = req.url || "/";
+  const [pathname] = reqUrl.split("?");
+
+  if (pathname === "/api/sf/config-token") {
+    if (existsSync(tokenFile)) {
+      try {
+        const token = readFileSync(tokenFile, "utf-8").trim();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ token }));
+        return;
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+    } else {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Token not found" }));
+      return;
+    }
+  }
+
+  const target = getProxyTarget(reqUrl);
   if (target) {
     const headers = { ...req.headers, ...(target.headers || {}) };
     const hostFormatted = target.host.includes(":") && !target.host.startsWith("[")

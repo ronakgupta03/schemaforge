@@ -141,6 +141,7 @@ interface Env extends ContainerEnv {
 const REPLAY_PATHS: Record<string, number> = {
   "/api/sf/config/postgres-mcp": 9001,
   "/api/sf/config/github-mcp": 9002,
+  "/api/sf/config": 9010,
   "/api/sf/apply-agent": 9010,
 };
 
@@ -220,12 +221,15 @@ export default {
         p === "/api/sf" ||
         p.startsWith("/api/sf/");
       if (isProtected) {
-        const auth = request.headers.get("Authorization");
-        if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
-          return new Response(JSON.stringify({ error: "Unauthorized" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          });
+        const viaAccess = request.headers.get("CF-Access-Jwt-Assertion");
+        if (!viaAccess) {
+          const auth = request.headers.get("Authorization");
+          if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
+            return new Response(JSON.stringify({ error: "Unauthorized" }), {
+              status: 401,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
         }
       }
     }
