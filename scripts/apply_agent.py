@@ -14,20 +14,25 @@ from pathlib import Path
 
 import httpx
 
-from schemaforge_core.registry import load_agent_state
+from schemaforge_core.registry import build_manifest, load_agent_state
 from schemaforge_core.registry_server import fetch_snapshot, upsert_agent
-from schemaforge_core.registry import build_manifest
-
 BASE = os.environ.get("TRUEFORGE_URL", "http://localhost:8790")
 HERE = Path(__file__).resolve().parent
 INSTRUCTIONS = (HERE.parent / "agent" / "instructions.md").read_text()
 
 
 def main() -> None:
-    model = os.environ.get("SCHEMAFORGE_MODEL") or load_agent_state().get("model")
+    state = load_agent_state()
+    model = os.environ.get("SCHEMAFORGE_MODEL") or state.get("model")
     with httpx.Client(base_url=BASE, timeout=60) as client:
         snapshot = fetch_snapshot(client)
-        manifest = build_manifest(snapshot, INSTRUCTIONS, model, overrides=None)
+        manifest = build_manifest(
+            snapshot,
+            INSTRUCTIONS,
+            model,
+            overrides=None,
+            enabled_servers=state.get("enabled_servers"),
+        )
         result = upsert_agent(client, manifest)
     print(json.dumps({"agent": result, "manifest": manifest}, indent=2))
     omitted = [s["name"] for s in snapshot.mcp_servers if not s.get("enabled", True)]
