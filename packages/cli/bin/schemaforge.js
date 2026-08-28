@@ -6,6 +6,7 @@ import { createReadStream, existsSync, statSync, mkdirSync, rmSync, writeFileSyn
 import { join, dirname, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
+import net from "node:net";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -148,20 +149,30 @@ if (!existsSync(venvReady)) {
 }
 
 // 2. services
-start(venvPy, [join(ROOT, "mcp-servers", "postgres-mcp", "server.py")], {
-  SF_CONFIG_PORT: pgConfigPort,
-  PORT: pgTransportPort,
-  DATABASE_URL: process.env.DATABASE_URL || "",
-});
+if (await portInUse(Number(pgTransportPort))) {
+  console.log(`[schemaforge] reusing running postgres-mcp on :${pgTransportPort}`);
+} else {
+  start(venvPy, [join(ROOT, "mcp-servers", "postgres-mcp", "server.py")], {
+    SF_CONFIG_PORT: pgConfigPort,
+    PORT: pgTransportPort,
+    DATABASE_URL: process.env.DATABASE_URL || "",
+  });
+}
 
-start(venvPy, [join(ROOT, "mcp-servers", "github-mcp", "server.py")], {
-  SF_CONFIG_PORT: ghConfigPort,
-  PORT: ghTransportPort,
-  GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "",
-});
+if (await portInUse(Number(ghTransportPort))) {
+  console.log(`[schemaforge] reusing running github-mcp on :${ghTransportPort}`);
+} else {
+  start(venvPy, [join(ROOT, "mcp-servers", "github-mcp", "server.py")], {
+    SF_CONFIG_PORT: ghConfigPort,
+    PORT: ghTransportPort,
+    GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "",
+  });
+}
 
 const regServerFile = join(ROOT, "core", "schemaforge_core", "registry_server.py");
-if (existsSync(regServerFile)) {
+if (await portInUse(Number(regPort))) {
+  console.log(`[schemaforge] reusing running registry on :${regPort}`);
+} else if (existsSync(regServerFile)) {
   start(venvPy, ["-m", "schemaforge_core.registry_server"], {
     SF_REGISTRY_PORT: regPort,
     TRUEFORGE_URL: `http://localhost:${tfPort}`,
@@ -201,12 +212,28 @@ HTTPServer(('127.0.0.1', port), Handler).serve_forever()
   });
 }
 
-// 3. TrueForge (standalone)
-start("npx", ["@truefoundry/trueforge"], {
-  STANDALONE: "true",
-  PORT: tfPort,
-  HOST: tfHost,
-});
+// 3. TrueForge (standalone) — reuse a running instance instead of crashing
+// on EADDRINUSE (the operator may already have TrueForge up).
+async function portInUse(port) {
+  try {
+    const s = net.connect(port, "127.0.0.1");
+    await once(s, "connect");
+    s.destroy();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (await portInUse(Number(tfPort))) {
+  console.log(`[schemaforge] reusing running TrueForge on :${tfPort}`);
+} else {
+  start("npx", ["@truefoundry/trueforge"], {
+    STANDALONE: "true",
+    PORT: tfPort,
+    HOST: tfHost,
+  });
+}
 
 // 4. static UI + proxy
 function getProxyTarget(urlPath) {
