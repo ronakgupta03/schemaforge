@@ -34,6 +34,8 @@ interface ContainerEnv {
   SF_MCP_CONFIG_TOKEN: string;
   SF_DEPLOY_TOKEN?: string;
   DAYTONA_API_KEY?: string;
+  CF_ACCESS_TEAM?: string;
+  CF_ACCESS_AUD?: string;
   ASSETS: Fetcher;
 }
 
@@ -147,6 +149,102 @@ const REPLAY_PATHS: Record<string, number> = {
 
 let replayPromise: Promise<void> | null = null;
 let lastReplay = 0;
+interface AccessJwk extends JsonWebKey {
+  kid?: string;
+}
+
+let cachedJwks: { team: string; keys: AccessJwk[]; fetchedAt: number } | null = null;
+function base64UrlDecode(str: string): Uint8Array {
+  let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (base64.length % 4 !== 0) {
+    base64 += "=";
+  }
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function base64UrlDecodeJson<T = unknown>(str: string): T | null {
+  try {
+    const bytes = base64UrlDecode(str);
+    const text = new TextDecoder().decode(bytes);
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function getJwks(team: string): Promise<AccessJwk[]> {
+  const now = Date.now();
+  if (cachedJwks && cachedJwks.team === team && now - cachedJwks.fetchedAt < 60 * 60 * 1000) {
+    return cachedJwks.keys;
+  }
+  const url = `https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch JWKS: ${res.status}`);
+  }
+  const data = (await res.json()) as { keys?: AccessJwk[] };
+  if (!data || !Array.isArray(data.keys)) {
+    throw new Error("Invalid JWKS response");
+  }
+  cachedJwks = { team, keys: data.keys, fetchedAt: now };
+  return data.keys;
+}
+
+async function verifyAccessJwt(header: string, e: Env): Promise<boolean> {
+  try {
+    if (!e.CF_ACCESS_TEAM || !e.CF_ACCESS_AUD) return false;
+    const parts = header.trim().split(".");
+    if (parts.length !== 3) return false;
+    const [headerB64, payloadB64, sigB64] = parts;
+    const payload = base64UrlDecodeJson<{ exp?: number; aud?: string | string[] }>(payloadB64);
+    if (!payload || typeof payload.exp !== "number" || payload.exp * 1000 <= Date.now()) {
+      return false;
+    }
+    const audMatches = Array.isArray(payload.aud)
+      ? payload.aud.includes(e.CF_ACCESS_AUD)
+      : payload.aud === e.CF_ACCESS_AUD;
+    if (!audMatches) return false;
+
+    const jwks = await getJwks(e.CF_ACCESS_TEAM);
+    const dataBytes = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const sigBytes = base64UrlDecode(sigB64);
+
+    const headerObj = base64UrlDecodeJson<{ kid?: string; alg?: string }>(headerB64);
+    const candidateKeys = headerObj?.kid
+      ? jwks.filter((k) => !k.kid || k.kid === headerObj.kid)
+      : jwks;
+    const keysToTry = candidateKeys.length > 0 ? candidateKeys : jwks;
+
+    for (const key of keysToTry) {
+      try {
+        const cryptoKey = await crypto.subtle.importKey(
+          "jwk",
+          key,
+          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+          false,
+          ["verify"],
+        );
+        const valid = await crypto.subtle.verify(
+          { name: "RSASSA-PKCS1-v1_5" },
+          cryptoKey,
+          sigBytes,
+          dataBytes,
+        );
+        if (valid) return true;
+      } catch {
+        // try next key
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 async function maybeReplay(e: Env): Promise<void> {
   const now = Date.now();
@@ -157,7 +255,9 @@ async function maybeReplay(e: Env): Promise<void> {
       let ok = true;
       if (e.SF_CONFIG_KV) {
         const list = await e.SF_CONFIG_KV.list();
-        for (const key of list.keys) {
+        const rank = (k: string) => (k.startsWith("/api/sf/config/") ? 0 : k === "/api/sf/config" ? 1 : 2);
+        const keys = list.keys.sort((a, b) => rank(a.name) - rank(b.name));
+        for (const key of keys) {
           try {
             const body = await e.SF_CONFIG_KV.get(key.name);
             const port = REPLAY_PATHS[key.name];
@@ -166,7 +266,16 @@ async function maybeReplay(e: Env): Promise<void> {
             if (key.name.startsWith("/api/sf/config/") && e.SF_MCP_CONFIG_TOKEN) {
               headers["Authorization"] = `Bearer ${e.SF_MCP_CONFIG_TOKEN}`;
             }
-            await containerFetch(e, `http://x.internal${key.name}`, { method: "POST", headers, body }, port);
+            const r = await containerFetch(e, `http://x.internal${key.name}`, { method: "POST", headers, body }, port);
+            try {
+              await r.text();
+            } catch {
+              // drain best-effort
+            }
+            if (!r.ok) {
+              ok = false;
+              console.error(`kv replay http ${r.status} for ${key.name}`);
+            }
           } catch (itemErr) {
             ok = false;
             console.error(`kv replay failed for ${key.name}`, itemErr);
@@ -184,6 +293,7 @@ async function maybeReplay(e: Env): Promise<void> {
   })();
   return replayPromise;
 }
+
 
 async function containerFetch(
   e: Env,
@@ -226,7 +336,9 @@ export default {
         p.startsWith("/api/sf/");
       if (isProtected) {
         const viaAccess = request.headers.get("CF-Access-Jwt-Assertion");
-        if (!viaAccess) {
+        if (viaAccess && (await verifyAccessJwt(viaAccess, e))) {
+          // Access JWT verified — allow
+        } else {
           const auth = request.headers.get("Authorization");
           if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
             return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -237,7 +349,6 @@ export default {
         }
       }
     }
-
     if (p === "/api/sf" || p.startsWith("/api/sf/")) {
       await maybeReplay(e);
     }
