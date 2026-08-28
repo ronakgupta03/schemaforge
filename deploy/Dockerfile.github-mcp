@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+WORKDIR /srv
+COPY mcp-servers/github-mcp/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY mcp-servers/github-mcp/server.py ./server.py
+ENV HOST=0.0.0.0 PORT=8002
+EXPOSE 8002
+CMD ["python", "server.py"]
