@@ -37,13 +37,27 @@ cd deploy
 # 1. Auth check
 npx wrangler whoami >/dev/null 2>&1 || { echo "Not logged in. Run: npx wrangler login"; exit 1; }
 
+# 2. KV namespace for config replay (idempotent)
+TOML_PATH="wrangler.toml"
+[ -f "$TOML_PATH" ] || TOML_PATH="deploy/wrangler.toml"
+KV_ID=$(grep -oP 'id = "\K[^"]+' "$TOML_PATH" | head -1 || true)
+if [ -z "$KV_ID" ] || [ "$KV_ID" = "KV_NAMESPACE_ID_PLACEHOLDER" ]; then
+  echo "== creating KV namespace SF_CONFIG_KV"
+  KV_OUT=$(npx wrangler kv namespace create SF_CONFIG_KV 2>/dev/null || true)
+  KV_ID=$(printf '%s' "$KV_OUT" | grep -oP '(?:id = "|id":\s*")\K[^"]+' | head -1 || true)
+  if [ -n "$KV_ID" ]; then
+    echo "== injected KV namespace id: $KV_ID"
+    sed -i "s/KV_NAMESPACE_ID_PLACEHOLDER/$KV_ID/" "$TOML_PATH"
+  fi
+fi
+
 secret() {
   local name="$1" value="$2"
   echo "== secret: $name"
   printf '%s\n' "$value" | npx wrangler secret put "$name" --name schemaforge-worker
 }
 
-# 2. All secrets except PUBLIC_BASE_URL (deploy URL is unknown until first deploy)
+# 3. All secrets except PUBLIC_BASE_URL (deploy URL is unknown until first deploy)
 secret POSTGRES_USER "$pg_user"
 secret POSTGRES_PASSWORD "$pg_pass"
 secret POSTGRES_HOST "$pg_host"
@@ -55,7 +69,7 @@ secret SF_MCP_CONFIG_TOKEN "$sf_mcp_config_token"
 secret CLOUDFLARE_AUTH_TOKEN "${CLOUDFLARE_AUTH_TOKEN:?set CLOUDFLARE_AUTH_TOKEN in .env}"
 secret CLOUDFLARE_ACCOUNT_ID "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID in .env}"
 
-# 3. First deploy (captures the workers.dev URL)
+# 4. First deploy (captures the workers.dev URL)
 echo "== deploy (1st)"
 deploy_out=$(npx wrangler deploy 2>&1) || true
 echo "$deploy_out" | tail -15
@@ -67,7 +81,7 @@ if [ -z "$url" ]; then
   exit 1
 fi
 
-# 4. PUBLIC_BASE_URL + redeploy so the container boots with it
+# 5. PUBLIC_BASE_URL + redeploy so the container boots with it
 echo "== detected URL: $url"
 secret PUBLIC_BASE_URL "$url"
 echo "== redeploy with PUBLIC_BASE_URL"

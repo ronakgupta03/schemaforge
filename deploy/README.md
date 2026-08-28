@@ -13,6 +13,14 @@ configure integrations (Model Providers, Connectors, Services, Sandbox) in the
 deployed Evidence UI's **Settings** tab. When Settings are saved and applied, the
 registry dynamically derives and upserts the agent manifest.
 
+
+### KV-Backed Config Replay (Container Sleep Survival)
+
+Cloudflare container disk is ephemeral across container sleeps. To ensure operator
+configurations survive container wake without manual re-entry:
+- Successful `POST` requests to `/api/sf/config/postgres-mcp`, `/api/sf/config/github-mcp`, and `/api/sf/apply-agent` are automatically persisted by the Worker into the `SF_CONFIG_KV` KV namespace.
+- On Worker cold start / container wake, the first `/api/sf/*` request triggers an automatic replay of all saved configurations from `SF_CONFIG_KV` to the respective container endpoints (Postgres MCP on port 9001, GitHub MCP on port 9002 with `SF_MCP_CONFIG_TOKEN`, and Registry on port 9010).
+- `scripts/apply-cf-secrets.sh` idempotently creates the `SF_CONFIG_KV` namespace and injects its namespace ID into `deploy/wrangler.toml`.
 ## Routing (Worker)
 
 - `/api/sf/config/postgres-mcp` → PostgresMcpContainer config port (9001)

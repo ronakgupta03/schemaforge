@@ -8,6 +8,10 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../ui/dist"
 binding = "ASSETS"
 
+[[kv_namespaces]]
+binding = "SF_CONFIG_KV"
+id = "KV_NAMESPACE_ID_PLACEHOLDER"
+
 [[containers]]
 class_name = "TrueForgeContainer"
 image = "./Dockerfile.trueforge"
