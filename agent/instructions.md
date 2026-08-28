@@ -38,22 +38,36 @@ produce, in order:
   partial data dies with a cryptic `IntegrityError` and burns the clock.
   (Qodo caught this exact bug on the agent-authored PR; do not regress it.)
 
-## Tool inventory
-- `postgres-prod` MCP: `list_tables`, `table_schema`, `row_count`, `explain`
-  (read-only); `execute_ddl` and `execute_migration` (both APPROVAL-GATED —
-  the only irreversible steps). Use `execute_migration` for the full Alembic
-  batch (DDL + backfill + version stamping, one transaction); use
-  `execute_ddl` only for pure DDL.
-- `github` MCP: repo/branch/file/PR tools (reversible — not gated).
+## Tool inventory (detect at runtime — some servers may be absent)
+
+The MCP servers attached to this agent are a DERIVED set: only the ones the
+operator configured. Before relying on a server, confirm it is present (its
+tools appear in your tool list). NEVER call a tool from a server you cannot
+see — that fails. Missing servers are a config choice, not an error.
+
+- `postgres-prod` MCP (IF present): `list_tables`, `table_schema`, `row_count`,
+  `explain` (read-only); `execute_ddl` and `execute_migration` (both
+  APPROVAL-GATED — the only irreversible steps). If ABSENT: skip all prod-DB
+  introspection and the prod apply; deliver the migration SQL + verify against
+  the sandbox DB only, and say clearly "production apply skipped: no
+  postgres-prod MCP configured".
+- `github` MCP (IF present): repo/branch/file/PR tools (reversible — not
+  gated). If ABSENT: skip the PR step; save the diff as an artifact
+  (`out/diff.patch` via the sandbox) and say "PR skipped: no github MCP
+  configured".
 - Sandbox (Code Mode): python + `schemaforge_core` + `demo-app` checkout at
-  `/workspace`; you run alembic/pytest/psql there.
+  `/workspace`. If the sandbox capability is disabled, do not attempt shell
+  steps; explain what could not be verified.
 - Skill `schemaforge-migration`: the step-by-step workflow. Follow it.
 
 ## Sandbox bootstrap (once per session — do this FIRST)
-The sandbox starts empty. Put the repo at `/workspace` and provision it:
+The sandbox starts empty. Put the repo at `/workspace` and provision it. Note
+that the operator may have pointed SchemaForge at a different repo:
+`GITHUB_REPO_URL` (default `https://github.com/ronakgupta03/schemaforge.git`)
+is available in the sandbox environment; clone that.
 
 ```bash
-git clone --depth 1 https://github.com/ronakgupta03/schemaforge.git /workspace \
+git clone --depth 1 ${GITHUB_REPO_URL:-https://github.com/ronakgupta03/schemaforge.git} /workspace \
   || test -d /workspace/.git
 bash /workspace/scripts/sandbox_setup.sh
 ```
@@ -111,9 +125,11 @@ yourself, and present the mermaid graph to the user.
    at 0001), then call `postgres-prod.execute_migration` with that SQL.
    After it returns: measure the DDL wall time if the report needs it, and
    verify with `table_schema` + `row_count`.
-8. Open the GitHub PR: push the modified files (migration + code) to a new
-   branch `schemaforge/<slug>` via the github MCP and create the PR with a
-   description that embeds the safety report and the impact graph.
+8. Open the GitHub PR — ONLY IF the `github` MCP server is present. Push the
+   modified files (migration + code) to a new branch `schemaforge/<slug>` via
+   the github MCP and create the PR with a description that embeds the safety
+   report and the impact graph. Otherwise write `git diff > /workspace/out/diff.patch`
+   in the sandbox and report the artifact path instead of a PR URL.
 9. Summarize: what changed, what was verified, where the PR is, what the
    rollback is (`alembic downgrade -1` on prod).
 

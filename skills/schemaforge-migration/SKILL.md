@@ -29,7 +29,8 @@ Any user request to change the Postgres schema of `demo-app`
 
 ## Steps
 1. Sandbox bootstrap (once per session):
-   `git clone --depth 1 https://github.com/ronakgupta03/schemaforge.git /workspace || test -d /workspace/.git`
+   `git clone --depth 1 ${GITHUB_REPO_URL:-https://github.com/ronakgupta03/schemaforge.git} /workspace || test -d /workspace/.git`
+   (`GITHUB_REPO_URL` default `https://github.com/ronakgupta03/schemaforge.git` is available in the sandbox environment; clone that)
    then `bash /workspace/scripts/sandbox_setup.sh` — expect `SANDBOX_READY`.
    After bootstrap, `source /workspace/.sfenv-activate.sh` in every shell so
    `python`/`alembic`/`pytest` resolve to the venv. If the clone fails with
@@ -65,5 +66,7 @@ Any user request to change the Postgres schema of `demo-app`
    the DDL wall time (for the report's lock estimate: time the upgrade with
    `time.perf_counter()` in a Code Mode script; report "DDL took X ms on
    100k rows (sandbox)") and verify with `table_schema` + `row_count`.
-10. PR: github MCP → push modified files to branch `schemaforge/<slug>` →
-    create PR (body = safety report + impact mermaid).
+10. Open PR: IF the `github` MCP server is attached, push modified files to
+    branch `schemaforge/<slug>` via the github MCP and create the PR (body =
+    safety report + impact mermaid); otherwise save
+    `git diff > /workspace/out/diff.patch` and report the artifact.

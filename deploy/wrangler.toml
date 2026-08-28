@@ -8,6 +8,10 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../ui/dist"
 binding = "ASSETS"
 
+[[kv_namespaces]]
+binding = "SF_CONFIG_KV"
+id = "KV_NAMESPACE_ID_PLACEHOLDER"
+
 [[containers]]
 class_name = "TrueForgeContainer"
 image = "./Dockerfile.trueforge"
@@ -29,6 +33,13 @@ image_build_context = "../"
 max_instances = 1
 instance_type = "lite"
 
+[[containers]]
+class_name = "RegistryContainer"
+image = "./Dockerfile.registry"
+image_build_context = "../"
+max_instances = 1
+instance_type = "lite"
+
 [[durable_objects.bindings]]
 name = "TRUEFORGE_CONTAINER"
 class_name = "TrueForgeContainer"
@@ -41,16 +52,20 @@ class_name = "PostgresMcpContainer"
 name = "GITHUB_MCP_CONTAINER"
 class_name = "GithubMcpContainer"
 
+[[durable_objects.bindings]]
+name = "REGISTRY_CONTAINER"
+class_name = "RegistryContainer"
+
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["TrueForgeContainer", "PostgresMcpContainer", "GithubMcpContainer"]
+new_sqlite_classes = ["TrueForgeContainer", "PostgresMcpContainer", "GithubMcpContainer", "RegistryContainer"]
 
 [vars]
 STANDALONE = "false"
 HOST = "0.0.0.0"
 PORT = "8790"
 # Secrets (POSTGRES_PASSWORD, REDIS_URL, PUBLIC_BASE_URL, DAYTONA_API_KEY,
-# GITHUB_PERSONAL_ACCESS_TOKEN, CLOUDFLARE_AUTH_TOKEN, CLOUDFLARE_ACCOUNT_ID)
+# SF_MCP_CONFIG_TOKEN, CLOUDFLARE_AUTH_TOKEN, CLOUDFLARE_ACCOUNT_ID)
 # are set via `wrangler secret put` — never in this file.
 
 [triggers]
