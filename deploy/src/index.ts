@@ -171,7 +171,7 @@ export default {
       // Strip the /tf prefix for the container's own routing; pass through
       // everything else (assets, api) untouched.
       const target = p.startsWith("/tf")
-        ? new URL(p === "/tf" ? "/" : p.slice(3), url)
+        ? new URL((p === "/tf" ? "/" : p.slice(3)) + url.search, url)
         : url;
       return await container.fetch(
         new Request(target.toString(), request),

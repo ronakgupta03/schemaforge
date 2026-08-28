@@ -27,9 +27,9 @@ registry dynamically derives and upserts the agent manifest.
 
 - Workers Paid plan (containers is not on free tier)
 - `wrangler login` (interactive browser auth)
-- Neon project `gentle-cherry-41625953` (dbs `trueforge` + `bookstore`, seeded)
+- Neon project `gentle-cherry-41625953` (dbs `trueforge` + `bookstore`, seeded); set `NEON_CONNECTION_URL` (required env, never commit)
 - External managed Redis (Upstash/Redis Cloud) — containers cannot reach a
-  Redis container (outbound intercepts HTTP only)
+  Redis container (outbound intercepts HTTP only); set `REDIS_URL`
 
 ## One-time setup
 
@@ -49,11 +49,11 @@ wrangler secret put CLOUDFLARE_AUTH_TOKEN
 wrangler secret put CLOUDFLARE_ACCOUNT_ID
 ```
 
-Or run the one-shot script from the repo root (derives Neon creds from the
-owner URL, generates `SF_MCP_CONFIG_TOKEN` if unset, requires `REDIS_URL` exported, checks login):
+Or run the one-shot script from the repo root (derives Neon creds from
+`NEON_CONNECTION_URL`, requires `REDIS_URL` and `GITHUB_REPO_URL` in `.env` or exported, generates `SF_MCP_CONFIG_TOKEN` if unset, checks login):
 
 ```bash
-REDIS_URL=rediss://... scripts/apply-cf-secrets.sh
+NEON_CONNECTION_URL=postgresql://... REDIS_URL=rediss://... scripts/apply-cf-secrets.sh
 ```
 
 Then, with the built UI:
@@ -80,7 +80,7 @@ wrangler deploy
 
 ## Post-deploy bootstrap
 
-From the repo root, with `.env` sourced:
+From the repo root, with `.env` sourced (requires `GITHUB_REPO_URL`, e.g. `https://github.com/ronakgupta03/schemaforge`, required by `import_skill.py`):
 
 ```bash
 set -a && . ./.env && set +a
