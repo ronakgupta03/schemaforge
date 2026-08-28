@@ -5,7 +5,14 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    dedupe: ["@assistant-ui/core", "@assistant-ui/react", "react", "react-dom"],
+    dedupe: [
+      "@assistant-ui/core",
+      "@assistant-ui/react",
+      "@assistant-ui/tap",
+      "@assistant-ui/store",
+      "react",
+      "react-dom",
+    ],
   },
   server: {
     host: true,
