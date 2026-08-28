@@ -1,5 +1,21 @@
 # SchemaForge Evidence UI + Cloudflare Deployment — Implementation Plan
 
+> **EXECUTION NOTE (2026-08-28, applied live):** the published
+> `@truefoundry/trueforge-ui` (0.2.4 and 0.3.0-rc.0) crashes in this build
+> environment with a tap `getSnapshot` infinite loop ("Maximum update depth
+> exceeded. The result of getSnapshot should be cached") — verified across
+> React 18.3.1/19.2.x, vite dev and production builds, and every dedupe
+> configuration. The server's OWN bundled UI (shipped inside the `trueforge`
+> package, built from monorepo main, React 19.2.8) works: renders, streams,
+> and accepts composer input. The plan's "embed the SDK" approach was
+> replaced by **embedding the server's UI via iframe** (`VITE_CHAT_URL`,
+> default `http://[::1]:8790` in local dev; same-origin route in the
+> Cloudflare deploy) beside the EvidencePanel. Tasks 1-5 (evidence panels,
+> sfApi, useEvidence, tests) are unchanged and verified; Task 6's local
+> acceptance was met with the iframe layout (composer input lands,
+> evidence panel polls the live API). The `defaultAgentSpec`/composer
+> research is recorded in the repo ledger (.superpowers/sdd/progress.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship an evidence-first web UI for the SchemaForge agent (chat + five live artifact panels, no blind approvals) and deploy the full stack to Cloudflare (Pages + Containers + Neon), producing the submission's "deployed link".
