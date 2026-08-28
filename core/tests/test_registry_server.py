@@ -1,6 +1,11 @@
 import httpx
 
-from schemaforge_core.registry_server import fetch_snapshot, upsert_agent
+from schemaforge_core.registry_server import (
+    _instructions,
+    _valid_enabled_servers,
+    fetch_snapshot,
+    upsert_agent,
+)
 
 
 def _mock(handler):
@@ -70,3 +75,35 @@ def test_upsert_agent_creates():
 
     out = upsert_agent(_mock(handler), {"model": {"name": "a/one"}})
     assert out["id"] == "new"
+
+
+def test_valid_enabled_servers():
+    assert _valid_enabled_servers([]) is True
+    assert _valid_enabled_servers(["github"]) is True
+    assert _valid_enabled_servers(["postgres-prod", "mcp_server.1"]) is True
+    assert _valid_enabled_servers(42) is False
+    assert _valid_enabled_servers("github") is False
+    assert _valid_enabled_servers(None) is False
+    assert _valid_enabled_servers([""]) is False
+    assert _valid_enabled_servers(["123invalid"]) is False
+    assert _valid_enabled_servers(["-invalid"]) is False
+    assert _valid_enabled_servers(["Upper"]) is False
+    assert _valid_enabled_servers([42]) is False
+    assert _valid_enabled_servers([None]) is False
+    assert _valid_enabled_servers({"github": True}) is False
+
+
+def test_instructions_fallback_when_file_missing(monkeypatch):
+    monkeypatch.setenv("SF_INSTRUCTIONS_PATH", "/nonexistent/path/instructions.md")
+    content = _instructions()
+    assert (
+        content
+        == "You are SchemaForge. Follow the schemaforge-migration skill for the migration workflow."
+    )
+
+
+def test_instructions_from_file(monkeypatch, tmp_path):
+    p = tmp_path / "instructions.md"
+    p.write_text("Custom instructions content")
+    monkeypatch.setenv("SF_INSTRUCTIONS_PATH", str(p))
+    assert _instructions() == "Custom instructions content"
