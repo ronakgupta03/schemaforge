@@ -31,6 +31,8 @@ interface ContainerEnv {
   POSTGRES_DB: string;
   REDIS_URL: string;
   SF_MCP_CONFIG_TOKEN: string;
+  SF_DEPLOY_TOKEN?: string;
+  DAYTONA_API_KEY?: string;
   ASSETS: Fetcher;
 }
 
@@ -58,6 +60,7 @@ export class TrueForgeContainer extends Container {
     POSTGRES_PORT: runtimeEnv.POSTGRES_PORT,
     POSTGRES_DB: runtimeEnv.POSTGRES_DB,
     REDIS_URL: runtimeEnv.REDIS_URL,
+    DAYTONA_API_KEY: runtimeEnv.DAYTONA_API_KEY ?? "",
   };
 
   override async onActivityExpired() {
@@ -88,8 +91,9 @@ export class PostgresMcpContainer extends Container {
   sleepAfter = "10m";
 
   envVars = {
-    SF_MCP_CONFIG_TOKEN: runtimeEnv.SF_MCP_CONFIG_TOKEN,
+    SF_CONFIG_HOST: "0.0.0.0",
     SF_CONFIG_PORT: "9001",
+    SF_MCP_CONFIG_TOKEN: runtimeEnv.SF_MCP_CONFIG_TOKEN,
     PORT: "80",
   };
 }
@@ -99,8 +103,9 @@ export class GithubMcpContainer extends Container {
   sleepAfter = "10m";
 
   envVars = {
-    SF_MCP_CONFIG_TOKEN: runtimeEnv.SF_MCP_CONFIG_TOKEN,
+    SF_CONFIG_HOST: "0.0.0.0",
     SF_CONFIG_PORT: "9002",
+    SF_MCP_CONFIG_TOKEN: runtimeEnv.SF_MCP_CONFIG_TOKEN,
     PORT: "80",
   };
 }
@@ -113,6 +118,7 @@ export class RegistryContainer extends Container {
     TRUEFORGE_URL: "http://trueforge.internal",
     SF_REGISTRY_PORT: "9010",
     SF_REGISTRY_HOST: "0.0.0.0",
+    SF_AGENT_DIR: "/srv/agent",
   };
 }
 
@@ -135,12 +141,32 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname;
 
+    if (e.SF_DEPLOY_TOKEN) {
+      const isProtected =
+        p.startsWith("/api/v1/settings/") ||
+        p === "/api/sf" ||
+        p.startsWith("/api/sf/");
+      if (isProtected) {
+        const auth = request.headers.get("Authorization");
+        if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+    }
+
     if (p === "/api/sf/config/postgres-mcp" || p.startsWith("/api/sf/config/postgres-mcp/")) {
       const container = getContainerStub(e.POSTGRES_MCP_CONTAINER, "default");
       const subpath = p.slice("/api/sf/config/postgres-mcp".length) || "/config";
       const targetUrl = new URL(subpath + url.search, url);
+      const req = new Request(targetUrl.toString(), request);
+      if (e.SF_MCP_CONFIG_TOKEN) {
+        req.headers.set("Authorization", `Bearer ${e.SF_MCP_CONFIG_TOKEN}`);
+      }
       return await container.fetch(
-        switchPort(new Request(targetUrl.toString(), request), 9001),
+        switchPort(req, 9001),
       );
     }
 
@@ -148,8 +174,12 @@ export default {
       const container = getContainerStub(e.GITHUB_MCP_CONTAINER, "default");
       const subpath = p.slice("/api/sf/config/github-mcp".length) || "/config";
       const targetUrl = new URL(subpath + url.search, url);
+      const req = new Request(targetUrl.toString(), request);
+      if (e.SF_MCP_CONFIG_TOKEN) {
+        req.headers.set("Authorization", `Bearer ${e.SF_MCP_CONFIG_TOKEN}`);
+      }
       return await container.fetch(
-        switchPort(new Request(targetUrl.toString(), request), 9002),
+        switchPort(req, 9002),
       );
     }
 

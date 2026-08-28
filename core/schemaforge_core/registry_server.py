@@ -33,6 +33,10 @@ _AGENT_INSTRUCTIONS_PATH = os.environ.get("SF_INSTRUCTIONS_PATH") or os.path.joi
     "agent",
     "instructions.md",
 )
+_DEFAULT_INSTRUCTIONS = (
+    "You are SchemaForge: an autonomous, AST-aware, zero-downtime database "
+    "migration & refactoring agent."
+)
 
 def fetch_snapshot(
     client: httpx.Client,
@@ -42,11 +46,24 @@ def fetch_snapshot(
     servers = client.get(f"{base_url}/api/v1/settings/mcp-servers").json().get("data", [])
     models = client.get(f"{base_url}/api/v1/models").json().get("data", [])
     caps = client.get(f"{base_url}/api/v1/capabilities").json().get("data", {})
+    live_enabled: dict[str, bool] = {}
+    if enabled_servers is None:
+        try:
+            r = client.get(f"{base_url}/api/v1/mcp-servers")
+            if r.status_code == 200:
+                for item in r.json().get("data", []):
+                    name = (item.get("manifest") or {}).get("name") or item.get("name")
+                    if name:
+                        live_enabled[name] = bool(item.get("enabled", True))
+        except Exception:
+            pass
     mcp_servers = []
     for s in servers:
         d = {k: s[k] for k in ("name", "url", "description") if k in s}
         if enabled_servers is not None:
             d["enabled"] = s.get("name") in enabled_servers
+        elif live_enabled:
+            d["enabled"] = live_enabled.get(s.get("name"), True)
         mcp_servers.append(d)
     return SettingsSnapshot(
         mcp_servers=mcp_servers,
@@ -71,8 +88,16 @@ def upsert_agent(client: httpx.Client, manifest: dict[str, Any], base_url: str =
 
 
 def _instructions() -> str:
-    with open(_AGENT_INSTRUCTIONS_PATH) as f:
-        return f.read()
+    agent_dir = os.environ.get("SF_AGENT_DIR")
+    if agent_dir:
+        candidate = os.path.join(agent_dir, "instructions.md")
+        if os.path.exists(candidate):
+            with open(candidate) as f:
+                return f.read()
+    if os.path.exists(_AGENT_INSTRUCTIONS_PATH):
+        with open(_AGENT_INSTRUCTIONS_PATH) as f:
+            return f.read()
+    return _DEFAULT_INSTRUCTIONS
 
 
 class Handler(BaseHTTPRequestHandler):

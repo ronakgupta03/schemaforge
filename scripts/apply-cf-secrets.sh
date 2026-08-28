@@ -28,7 +28,7 @@ user = u.username or "neondb_owner"
 pw = u.password or ""
 host = u.hostname or ""
 port = u.port or 5432
-print(user); print(pw); print(host); print(port)
+print(f"{user} {pw} {host} {port}")
 ')
 EOF
 
