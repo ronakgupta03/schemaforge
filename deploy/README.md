@@ -106,9 +106,18 @@ and credentials directly in the **Settings** tab.
 - The UI's chat iframe defaults to the same-origin `/tf/` route in production
   (override with `VITE_CHAT_URL` at build time if needed).
 
+## Cloudflare Access Provisioning
+
+To secure the deployed Worker with Cloudflare Access:
+1. **Enable Access on the Zone/Route:** In Cloudflare Zero Trust dashboard, navigate to **Access** > **Applications**.
+2. **Create an Application for Worker Hostname:** Add a **Self-Hosted** application pointing to the Worker domain (e.g., `schemaforge-worker.<subdomain>.workers.dev` or your custom domain).
+3. **Configure Access Policies:** Define which users or identity providers are allowed to access the application.
+4. **Note the AUD Tag:** In the application overview/settings, copy the **Application Audience (AUD)** tag.
+5. **Set Worker Secrets:** Set `CF_ACCESS_TEAM` (your Zero Trust team name) and `CF_ACCESS_AUD` (the AUD tag) in `.env`, then run `scripts/apply-cf-secrets.sh` (or set them manually via `wrangler secret put CF_ACCESS_TEAM` and `wrangler secret put CF_ACCESS_AUD`).
+
 ## Access Model & Security
 
-- **Cloudflare Access (Real Gate):** In a deployed environment, Cloudflare Access sits in front of the Worker as the real access control gate (evaluating identity and injecting the `CF-Access-Jwt-Assertion` header).
-- **SF_DEPLOY_TOKEN (Optional API-Client Layer):** The Worker supports `SF_DEPLOY_TOKEN` as an optional bearer-token layer for external API clients and scripts. When `CF-Access-Jwt-Assertion` is present from Cloudflare Access, the Worker skips the `SF_DEPLOY_TOKEN` Bearer check.
-- **SPA Tokenless Design:** The Evidence UI SPA carries no deploy token in its client bundle. Browser users are authenticated directly by Cloudflare Access at the edge.
+- **Cloudflare Access (Verified JWT Gate):** When configured (`CF_ACCESS_TEAM` and `CF_ACCESS_AUD`), the Worker cryptographically verifies the `CF-Access-Jwt-Assertion` header via RS256 against Cloudflare's public team JWKS (`https://<CF_ACCESS_TEAM>.cloudflareaccess.com/cdn-cgi/access/certs`), validating expiration and AUD audience.
+- **SF_DEPLOY_TOKEN (Optional API-Client Layer):** The Worker supports `SF_DEPLOY_TOKEN` as a bearer-token layer for external API clients and automation scripts. Verified Access JWT sessions bypass the `SF_DEPLOY_TOKEN` Bearer check.
+- **SPA Tokenless Design:** The Evidence UI SPA carries no deploy token in its client bundle. Browser users authenticate directly through Cloudflare Access at the edge.
 - **SF_MCP_CONFIG_TOKEN:** Guards container configuration endpoints (Postgres MCP on port 9001, GitHub MCP on port 9002).

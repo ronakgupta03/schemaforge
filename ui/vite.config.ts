@@ -14,9 +14,12 @@ export default defineConfig({
         server.middlewares.use("/api/sf/config-token", (req, res) => {
           const host = (req.headers.host || "").toLowerCase();
           const isLoopback =
-            host.startsWith("localhost") ||
-            host.startsWith("127.0.0.1") ||
-            host.startsWith("[::1]");
+            host === "localhost" ||
+            host.startsWith("localhost:") ||
+            host === "127.0.0.1" ||
+            host.startsWith("127.0.0.1:") ||
+            host === "[::1]" ||
+            host.startsWith("[::1]:");
           if (!isLoopback) {
             res.statusCode = 403;
             res.setHeader("Content-Type", "application/json");

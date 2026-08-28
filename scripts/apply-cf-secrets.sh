@@ -6,7 +6,7 @@
 #   - REDIS_URL exported (external managed Redis: Upstash / Redis Cloud —
 #     containers cannot reach a Redis container; outbound intercepts HTTP only)
 #   - .env present with CLOUDFLARE_AUTH_TOKEN,
-#     CLOUDFLARE_ACCOUNT_ID, GITHUB_REPO_URL (optional: SF_MCP_CONFIG_TOKEN; generated if unset)
+#     CLOUDFLARE_ACCOUNT_ID, GITHUB_REPO_URL (optional: SF_MCP_CONFIG_TOKEN, CF_ACCESS_TEAM, CF_ACCESS_AUD)
 #   - NEON_CONNECTION_URL set (owner connection URL; see .env.example). POSTGRES_DB is 'trueforge'.
 
 set -euo pipefail
@@ -71,6 +71,17 @@ secret SF_MCP_CONFIG_TOKEN "$sf_mcp_config_token"
 secret CLOUDFLARE_AUTH_TOKEN "${CLOUDFLARE_AUTH_TOKEN:?set CLOUDFLARE_AUTH_TOKEN in .env}"
 secret CLOUDFLARE_ACCOUNT_ID "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID in .env}"
 
+if [ -n "${CF_ACCESS_TEAM:-}" ]; then
+  secret CF_ACCESS_TEAM "$CF_ACCESS_TEAM"
+else
+  echo "== skipping CF_ACCESS_TEAM (unset in .env)"
+fi
+
+if [ -n "${CF_ACCESS_AUD:-}" ]; then
+  secret CF_ACCESS_AUD "$CF_ACCESS_AUD"
+else
+  echo "== skipping CF_ACCESS_AUD (unset in .env)"
+fi
 # 4. First deploy (captures the workers.dev URL)
 echo "== deploy (1st)"
 deploy_out=$(npx wrangler deploy 2>&1) || true
