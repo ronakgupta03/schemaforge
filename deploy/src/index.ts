@@ -332,7 +332,10 @@ export default {
     const p = url.pathname;
 
     const accessConfigured = Boolean(e.CF_ACCESS_TEAM && e.CF_ACCESS_AUD);
-    if (!accessConfigured && !e.SF_DEPLOY_TOKEN && !warnedGateDisabled) {
+    const accessMisconfigured = Boolean((e.CF_ACCESS_TEAM || e.CF_ACCESS_AUD) && !accessConfigured);
+    if (accessMisconfigured) {
+      console.warn("deploy gate MISCONFIGURED — set BOTH CF_ACCESS_TEAM and CF_ACCESS_AUD; failing closed");
+    } else if (!accessConfigured && !e.SF_DEPLOY_TOKEN && !warnedGateDisabled) {
       warnedGateDisabled = true;
       console.warn("deploy gate DISABLED (set CF_ACCESS_TEAM + CF_ACCESS_AUD or SF_DEPLOY_TOKEN)");
     }
@@ -351,6 +354,11 @@ export default {
             headers: { "Content-Type": "application/json" },
           });
         }
+      } else if (accessMisconfigured) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
       } else if (e.SF_DEPLOY_TOKEN) {
         const auth = request.headers.get("Authorization");
         if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
@@ -361,6 +369,7 @@ export default {
         }
       }
     }
+
     if (p === "/api/sf" || p.startsWith("/api/sf/")) {
       await maybeReplay(e);
     }
