@@ -28,22 +28,28 @@ from schemaforge_core.registry import (
 
 TRUEFORGE_URL = os.environ.get("TRUEFORGE_URL", "http://localhost:8790")
 DEFAULT_PORT = int(os.environ.get("SF_REGISTRY_PORT", "9010"))
-_AGENT_INSTRUCTIONS_PATH = os.path.join(
+_AGENT_INSTRUCTIONS_PATH = os.environ.get("SF_INSTRUCTIONS_PATH") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "agent",
     "instructions.md",
 )
 
-
-def fetch_snapshot(client: httpx.Client, base_url: str = TRUEFORGE_URL) -> SettingsSnapshot:
+def fetch_snapshot(
+    client: httpx.Client,
+    base_url: str = TRUEFORGE_URL,
+    enabled_servers: list[str] | None = None,
+) -> SettingsSnapshot:
     servers = client.get(f"{base_url}/api/v1/settings/mcp-servers").json().get("data", [])
     models = client.get(f"{base_url}/api/v1/models").json().get("data", [])
     caps = client.get(f"{base_url}/api/v1/capabilities").json().get("data", {})
+    mcp_servers = []
+    for s in servers:
+        d = {k: s[k] for k in ("name", "url", "description") if k in s}
+        if enabled_servers is not None:
+            d["enabled"] = s.get("name") in enabled_servers
+        mcp_servers.append(d)
     return SettingsSnapshot(
-        mcp_servers=[
-            {k: s[k] for k in ("name", "url", "description") if k in s}
-            for s in servers
-        ],
+        mcp_servers=mcp_servers,
         models=[m.get("name") for m in models],
         sandbox_enabled=bool((caps.get("sandbox") or {}).get("enabled")),
     )
@@ -85,8 +91,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self._send(200, {"data": {"ok": True}})
         if self.path == "/snapshot":
+            state = load_agent_state()
             with httpx.Client(timeout=30) as c:
-                snap = fetch_snapshot(c)
+                snap = fetch_snapshot(c, enabled_servers=state.get("enabled_servers"))
             return self._send(200, {"data": snap.__dict__})
         self._send(404, {"error": "not found"})
 
@@ -98,13 +105,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "invalid JSON"})
         if self.path == "/apply-agent":
             try:
+                enabled_servers = body.get("enabled_servers")
                 with httpx.Client(timeout=60) as c:
-                    snap = fetch_snapshot(c)
                     state = load_agent_state()
+                    if enabled_servers is None:
+                        enabled_servers = state.get("enabled_servers")
+                    snap = fetch_snapshot(c, enabled_servers=enabled_servers)
+                    model = body.get("model") or state.get("model")
                     manifest = build_manifest(
-                        snap, _instructions(), state.get("model"), body.get("overrides", {})
+                        snap,
+                        _instructions(),
+                        model,
+                        body.get("overrides", {}),
+                        enabled_servers=enabled_servers,
                     )
                     upsert_agent(c, manifest)
+                    new_state = dict(state)
+                    if model:
+                        new_state["model"] = model
+                    if enabled_servers is not None:
+                        new_state["enabled_servers"] = enabled_servers
+                    save_agent_state(new_state)
                 return self._send(
                     200,
                     {"data": {"manifest": manifest, "omitted": [s["name"] for s in snap.mcp_servers if not s.get("enabled", True)]}},
@@ -112,11 +133,17 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send(422, {"error": str(exc)})
         if self.path == "/config":
+            state = load_agent_state()
             model = body.get("model")
-            if not model:
-                return self._send(400, {"error": "model required"})
-            save_agent_state({"model": model})
-            return self._send(200, {"data": {"model": model}})
+            enabled_servers = body.get("enabled_servers")
+            if not model and enabled_servers is None:
+                return self._send(400, {"error": "model or enabled_servers required"})
+            if model:
+                state["model"] = model
+            if enabled_servers is not None:
+                state["enabled_servers"] = enabled_servers
+            save_agent_state(state)
+            return self._send(200, {"data": state})
         self._send(404, {"error": "not found"})
 
 

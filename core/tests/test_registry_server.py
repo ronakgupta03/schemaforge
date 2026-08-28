@@ -23,6 +23,31 @@ def test_fetch_snapshot():
     assert snap.sandbox_enabled is True
 
 
+def test_fetch_snapshot_with_enabled_servers():
+    def handler(request):
+        if request.url.path == "/api/v1/settings/mcp-servers":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"name": "github", "url": "http://y/mcp"},
+                        {"name": "postgres-prod", "url": "http://x/mcp"},
+                    ]
+                },
+            )
+        if request.url.path == "/api/v1/models":
+            return httpx.Response(200, json={"data": [{"name": "cloudflare/deepseek-v4-flash"}]})
+        if request.url.path == "/api/v1/capabilities":
+            return httpx.Response(200, json={"data": {"sandbox": {"enabled": True}}})
+        return httpx.Response(404)
+
+    snap = fetch_snapshot(_mock(handler), enabled_servers=["github"])
+    assert snap.mcp_servers == [
+        {"name": "github", "url": "http://y/mcp", "enabled": True},
+        {"name": "postgres-prod", "url": "http://x/mcp", "enabled": False},
+    ]
+
+
 def test_upsert_agent_existing():
     def handler(request):
         if request.method == "GET" and request.url.path == "/api/v1/agents":

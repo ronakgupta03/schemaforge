@@ -32,6 +32,7 @@ def build_manifest(
     instructions: str,
     model_fqn: str | None,
     overrides: dict[str, Any] | None,
+    enabled_servers: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the AgentSpec manifest from live settings. Pure function."""
     overrides = overrides or {}
@@ -51,7 +52,7 @@ def build_manifest(
             ),
         }
         for s in snapshot.mcp_servers
-        if s.get("enabled", True)
+        if s.get("enabled", True) and (enabled_servers is None or s["name"] in enabled_servers)
     ]
     return {
         "model": {"name": model},
