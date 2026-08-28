@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@import "@truefoundry/trueforge-ui/styles.css";
+
+:root {
+  --sf-bg: #0b1220;
+  --sf-panel: #101a2e;
+  --sf-border: #1e2a44;
+  --sf-accent: #38bdf8;
+  --sf-ok: #34d399;
+  --sf-fail: #f87171;
+  --sf-text: #e2e8f0;
+  --sf-muted: #94a3b8;
+}
+
+html, body, #root { height: 100%; }
+body { background: var(--sf-bg); color: var(--sf-text); }
