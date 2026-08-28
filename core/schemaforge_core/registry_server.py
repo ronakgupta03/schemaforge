@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
 import httpx
 
 from schemaforge_core.registry import (
@@ -34,19 +33,10 @@ _AGENT_INSTRUCTIONS_PATH = os.environ.get("SF_INSTRUCTIONS_PATH") or os.path.joi
     "agent",
     "instructions.md",
 )
-_FALLBACK_INSTRUCTIONS = (
-    "You are SchemaForge. Follow the schemaforge-migration skill for the migration workflow."
+_DEFAULT_INSTRUCTIONS = (
+    "You are SchemaForge: an autonomous, AST-aware, zero-downtime database "
+    "migration & refactoring agent."
 )
-_SERVER_NAME_RE = re.compile(r"^[a-z][a-z0-9._-]*$")
-_STATE_LOCK = threading.Lock()
-
-
-def _valid_enabled_servers(value: Any) -> bool:
-    if not isinstance(value, list):
-        return False
-    return all(
-        isinstance(item, str) and bool(_SERVER_NAME_RE.match(item)) for item in value
-    )
 
 def fetch_snapshot(
     client: httpx.Client,
@@ -56,11 +46,24 @@ def fetch_snapshot(
     servers = client.get(f"{base_url}/api/v1/settings/mcp-servers").json().get("data", [])
     models = client.get(f"{base_url}/api/v1/models").json().get("data", [])
     caps = client.get(f"{base_url}/api/v1/capabilities").json().get("data", {})
+    live_enabled: dict[str, bool] = {}
+    if enabled_servers is None:
+        try:
+            r = client.get(f"{base_url}/api/v1/mcp-servers")
+            if r.status_code == 200:
+                for item in r.json().get("data", []):
+                    name = (item.get("manifest") or {}).get("name") or item.get("name")
+                    if name:
+                        live_enabled[name] = bool(item.get("enabled", True))
+        except Exception:
+            pass
     mcp_servers = []
     for s in servers:
         d = {k: s[k] for k in ("name", "url", "description") if k in s}
         if enabled_servers is not None:
             d["enabled"] = s.get("name") in enabled_servers
+        elif live_enabled:
+            d["enabled"] = live_enabled.get(s.get("name"), False)
         mcp_servers.append(d)
     return SettingsSnapshot(
         mcp_servers=mcp_servers,
@@ -85,11 +88,16 @@ def upsert_agent(client: httpx.Client, manifest: dict[str, Any], base_url: str =
 
 
 def _instructions() -> str:
-    path = os.environ.get("SF_INSTRUCTIONS_PATH") or _AGENT_INSTRUCTIONS_PATH
-    if os.path.exists(path):
-        with open(path) as f:
+    agent_dir = os.environ.get("SF_AGENT_DIR")
+    if agent_dir:
+        candidate = os.path.join(agent_dir, "instructions.md")
+        if os.path.exists(candidate):
+            with open(candidate) as f:
+                return f.read()
+    if os.path.exists(_AGENT_INSTRUCTIONS_PATH):
+        with open(_AGENT_INSTRUCTIONS_PATH) as f:
             return f.read()
-    return _FALLBACK_INSTRUCTIONS
+    return _DEFAULT_INSTRUCTIONS
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -121,28 +129,22 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, {"error": "invalid JSON"})
         if self.path == "/apply-agent":
-            enabled_servers = body.get("enabled_servers")
-            if enabled_servers is not None and not _valid_enabled_servers(enabled_servers):
-                return self._send(400, {"error": "enabled_servers must be a list of strings"})
-            if enabled_servers is not None:
-                enabled_servers = list(dict.fromkeys(enabled_servers))
             try:
-                with _STATE_LOCK:
+                enabled_servers = body.get("enabled_servers")
+                with httpx.Client(timeout=60) as c:
                     state = load_agent_state()
-                    active_enabled_servers = (
-                        enabled_servers if enabled_servers is not None else state.get("enabled_servers")
+                    if enabled_servers is None:
+                        enabled_servers = state.get("enabled_servers")
+                    snap = fetch_snapshot(c, enabled_servers=enabled_servers)
+                    model = body.get("model") or state.get("model")
+                    manifest = build_manifest(
+                        snap,
+                        _instructions(),
+                        model,
+                        body.get("overrides", {}),
+                        enabled_servers=enabled_servers,
                     )
-                    with httpx.Client(timeout=60) as c:
-                        snap = fetch_snapshot(c, enabled_servers=active_enabled_servers)
-                        model = body.get("model") or state.get("model")
-                        manifest = build_manifest(
-                            snap,
-                            _instructions(),
-                            model,
-                            body.get("overrides", {}),
-                            enabled_servers=active_enabled_servers,
-                        )
-                        upsert_agent(c, manifest)
+                    upsert_agent(c, manifest)
                     new_state = dict(state)
                     if model:
                         new_state["model"] = model
@@ -156,21 +158,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send(422, {"error": str(exc)})
         if self.path == "/config":
+            state = load_agent_state()
             model = body.get("model")
             enabled_servers = body.get("enabled_servers")
-            if enabled_servers is not None and not _valid_enabled_servers(enabled_servers):
-                return self._send(400, {"error": "enabled_servers must be a list of strings"})
             if not model and enabled_servers is None:
                 return self._send(400, {"error": "model or enabled_servers required"})
+            if model:
+                state["model"] = model
             if enabled_servers is not None:
-                enabled_servers = list(dict.fromkeys(enabled_servers))
-            with _STATE_LOCK:
-                state = load_agent_state()
-                if model:
-                    state["model"] = model
-                if enabled_servers is not None:
-                    state["enabled_servers"] = enabled_servers
-                save_agent_state(state)
+                state["enabled_servers"] = enabled_servers
+            save_agent_state(state)
             return self._send(200, {"data": state})
         self._send(404, {"error": "not found"})
 

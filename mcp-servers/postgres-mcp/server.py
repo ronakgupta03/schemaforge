@@ -33,8 +33,10 @@ def _load_config() -> dict:
 
 
 def _save_config() -> None:
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(os.path.join(STATE_DIR, "postgres-mcp.json"), "w") as f:
+    os.makedirs(STATE_DIR, exist_ok=True, mode=0o700)
+    path = os.path.join(STATE_DIR, "postgres-mcp.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(_config, f)
 
 
@@ -373,6 +375,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/config":
+            if not self._authorized():
+                return
             return self._send(200, {"data": {"configured": bool(_config.get("database_url"))}})
         self._send(404, {"error": "not found"})
 
@@ -404,7 +408,11 @@ def run_config_server(host: str = "127.0.0.1") -> None:
 if __name__ == "__main__":
     import threading
 
-    threading.Thread(target=run_config_server, daemon=True).start()
+    threading.Thread(
+        target=run_config_server,
+        kwargs={"host": os.environ.get("SF_CONFIG_HOST", "127.0.0.1")},
+        daemon=True,
+    ).start()
     mcp.settings.host = "0.0.0.0"
     # Cloudflare containers: outbound interception is HTTP(S) ports 80/443
     # only, so the deployed container listens on 80 (PORT env from the

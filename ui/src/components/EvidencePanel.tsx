@@ -5,9 +5,11 @@ import { SafetyReport } from "./SafetyReport";
 import { ChangesPanel } from "./ChangesPanel";
 import { VerificationPanel } from "./VerificationPanel";
 import { ActivityPanel } from "./ActivityPanel";
+import { SettingsPanel } from "./SettingsPanel";
 
-const TABS = ["Impact", "Report", "Changes", "Verification", "Activity"] as const;
+const TABS = ["Impact", "Report", "Changes", "Verification", "Activity", "Settings"] as const;
 type Tab = (typeof TABS)[number];
+const EVIDENCE_TABS: Tab[] = TABS.filter((t) => t !== "Settings");
 
 export function EvidencePanel() {
   const ev = useEvidence();
@@ -31,7 +33,7 @@ export function EvidencePanel() {
     prevTurnId.current = ev.turn?.id;
   }, [ev.approvalPending, ev.session?.id, ev.turn?.id]);
   const unReviewed = useMemo(
-    () => ev.approvalPending ? TABS.filter((t) => !visited.has(t)) : [],
+    () => ev.approvalPending ? EVIDENCE_TABS.filter((t) => !visited.has(t as Tab)) : [],
     [ev.approvalPending, visited],
   );
 
@@ -62,6 +64,7 @@ export function EvidencePanel() {
         {tab === "Changes" && <ChangesPanel sql={ev.artifacts.sql ?? null} diff={ev.artifacts.diff ?? null} />}
         {tab === "Verification" && <VerificationPanel verify={ev.artifacts.verify ?? null} />}
         {tab === "Activity" && <ActivityPanel activity={ev.activity} />}
+        {tab === "Settings" && <SettingsPanel fetchFn={fetch} />}
       </div>
     </div>
   );
