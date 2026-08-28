@@ -9,6 +9,7 @@ are these tools.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -16,7 +17,28 @@ import psycopg
 from mcp.server.fastmcp import FastMCP
 from psycopg.rows import dict_row
 
-DSN = os.environ["DATABASE_URL"]  # prod DB, e.g. postgresql://postgres:postgres@localhost:5433/bookstore
+STATE_DIR = os.environ.get("SF_STATE_DIR", os.path.expanduser("~/.schemaforge"))
+_CONFIG_TOKEN = os.environ.get("SF_MCP_CONFIG_TOKEN")
+CONFIG_PORT = int(os.environ.get("SF_CONFIG_PORT", "9001"))
+_config_httpd = None
+
+
+def _load_config() -> dict:
+    path = os.path.join(STATE_DIR, "postgres-mcp.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    dsn = os.environ.get("DATABASE_URL")
+    return {"database_url": dsn}
+
+
+def _save_config() -> None:
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(os.path.join(STATE_DIR, "postgres-mcp.json"), "w") as f:
+        json.dump(_config, f)
+
+
+_config: dict = _load_config()
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 _ALLOWED_DDL = re.compile(
@@ -40,8 +62,13 @@ _TRANSACTION_FRAME = re.compile(
 mcp = FastMCP("postgres-prod")
 
 
-def _conn() -> psycopg.Connection:
-    return psycopg.connect(DSN, row_factory=dict_row, autocommit=True)
+def _conn(autocommit: bool = True) -> psycopg.Connection:
+    dsn = _config.get("database_url")
+    if not dsn:
+        raise RuntimeError(
+            "postgres-prod is not configured: set a DATABASE_URL via the Settings panel or POST /config"
+        )
+    return psycopg.connect(dsn, row_factory=dict_row, autocommit=autocommit)
 
 
 def _check_ident(name: str) -> None:
@@ -297,7 +324,7 @@ def execute_migration(sql: str) -> str:
         raise ValueError("migration batch contains only transaction framing")
     for stmt in statements:
         _validate_migration_statement(stmt)
-    with psycopg.connect(DSN, row_factory=dict_row, autocommit=False) as conn:
+    with _conn(autocommit=False) as conn:
         pre = _existing_tables(conn)
         try:
             for i, stmt in enumerate(statements, 1):
@@ -318,6 +345,60 @@ def execute_migration(sql: str) -> str:
                 f"migration aborted and rolled back at statement {i}/{len(statements)}: {exc}"
             ) from exc
     return f"applied {len(statements)} migration statement(s) in one transaction"
+
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class ConfigHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def _send(self, code: int, obj: dict) -> None:
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authorized(self) -> bool:
+        if not _CONFIG_TOKEN:
+            self._send(503, {"error": "config disabled: SF_MCP_CONFIG_TOKEN unset"})
+            return False
+        if self.headers.get("Authorization") != f"Bearer {_CONFIG_TOKEN}":
+            self._send(401, {"error": "unauthorized"})
+            return False
+        return True
+
+    def do_GET(self) -> None:
+        if self.path == "/config":
+            return self._send(200, {"data": {"configured": bool(_config.get("database_url"))}})
+        self._send(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        if self.path != "/config":
+            return self._send(404, {"error": "not found"})
+        if not self._authorized():
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            return self._send(400, {"error": "invalid JSON"})
+        dsn = body.get("database_url")
+        if not dsn or not dsn.startswith(("postgresql://", "postgres://")):
+            return self._send(400, {"error": "database_url must be a postgresql:// DSN"})
+        _config["database_url"] = dsn
+        _save_config()
+        return self._send(202, {"data": {"ok": True, "configured": True}})
+
+
+def run_config_server(host: str = "127.0.0.1") -> None:
+    global _config_httpd
+    _config_httpd = ThreadingHTTPServer((host, CONFIG_PORT), ConfigHandler)
+    print(f"postgres-mcp config endpoint on {host}:{CONFIG_PORT}")
+    _config_httpd.serve_forever()
 
 
 if __name__ == "__main__":
