@@ -99,27 +99,18 @@ yourself, and present the mermaid graph to the user.
 4. Plan the migration: expand -> backfill -> contract. Check
    `reference/post-split/` ONLY if you are stuck (and say so to the user if
    you consult it).
+5. Verify in the sandbox: run `sf-pipeline verify --dir demo-app --dsn $DATABASE_URL --baseline out/db_before.json --parity-sql <parity file> --queries demo-app/queries/bench.sql --explain-before out/explain_before.json --out out/report.md` (produces `out/report.md` + `out/verify.json`) before presenting the safety report. Confirm alembic migration PASS, tests PASS, parity PASS before continuing.
 6. Present the safety report (markdown) and pause. You MUST call
    `ask_user_question` with options Approve / Deny / Request changes —
    never end the turn silently after the report. (The pre-approval flow
    must fit inside the server's execution window: keep it lean — do NOT
    time DDL, re-seed, or re-verify before the pause; only after approval.)
 7. On approval: generate the exact SQL with
-   `cd demo-app && alembic upgrade 0001:head --sql` (in the sandbox — the
-   `0001:head` range applies only the new revision; prod is already stamped
+   `cd demo-app && (alembic upgrade 0001:head --sql > /workspace/out/migration.sql) || { cat /workspace/out/migration.sql; exit 1; }`
+   (in the sandbox — the `0001:head` range applies only the new revision; prod is already stamped
    at 0001), then call `postgres-prod.execute_migration` with that SQL.
    After it returns: measure the DDL wall time if the report needs it, and
    verify with `table_schema` + `row_count`.
-8. Open the GitHub PR: push the modified files (migration + code) to a new
-   branch `schemaforge/<slug>` via the github MCP and create the PR with a
-   description that embeds the safety report and the impact graph.
-9. Summarize: what changed, what was verified, where the PR is, what the
-   rollback is (`alembic downgrade -1` on prod).
-6. Present the safety report (markdown) and STOP. Wait for the user.
-7. On approval: generate the exact SQL with
-   `cd demo-app && alembic upgrade 0001:head --sql` (in the sandbox — the
-   `0001:head` range applies only the new revision; prod is already stamped
-   at 0001), then call `postgres-prod.execute_migration` with that SQL.
 8. Open the GitHub PR: push the modified files (migration + code) to a new
    branch `schemaforge/<slug>` via the github MCP and create the PR with a
    description that embeds the safety report and the impact graph.

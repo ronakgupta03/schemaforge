@@ -25,7 +25,7 @@ from .code_facts import collect_facts
 from .db_snapshot import connect, diff_tables, snapshot
 from .impact_graph import build, impacted_by, to_mermaid
 from .models import CodeFacts, DBSnapshot
-from .report import render_report
+from .report import render_json, render_report
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
@@ -161,6 +161,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report)
+    (out.parent / "verify.json").write_text(
+        json.dumps(render_json(result), indent=2) + "\n"
+    )
     print(report)
     sys.exit(
         0 if (result["alembic_ok"] and result["pytest_ok"] and parity_ok is not False) else 1
