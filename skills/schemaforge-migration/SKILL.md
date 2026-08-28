@@ -51,25 +51,15 @@ Any user request to change the Postgres schema of `demo-app`
    (run against the SANDBOX dsn — the sandbox DB mirrors prod's pre-migration state).
 6. Author the migration in `/workspace/demo-app`: new alembic revision
    (0002) + code edits. Write a parity SQL file for THIS change.
+   Then `git diff > /workspace/out/diff.patch` (code changes only — the diff the UI shows).
 8. Present `out/report.md` in chat and PAUSE: call `ask_user_question`
    with options Approve / Deny / Request changes — do not end the turn
    silently after the report. Wait for the user's answer.
-9. On approval: `cd demo-app && alembic upgrade 0001:head --sql` (sandbox;
+9. On approval: `cd demo-app && alembic upgrade 0001:head --sql | tee /workspace/out/migration.sql` (sandbox;
    `0001:head` applies only the new revision — prod is already at 0001) →
    `postgres-prod.execute_migration(<that SQL>)`. After it returns, measure
    the DDL wall time (for the report's lock estimate: time the upgrade with
    `time.perf_counter()` in a Code Mode script; report "DDL took X ms on
    100k rows (sandbox)") and verify with `table_schema` + `row_count`.
 10. PR: github MCP → push modified files to branch `schemaforge/<slug>` →
-    create PR (body = safety report + impact mermaid).
-8. Measure DDL wall time in the sandbox (for the report's lock estimate):
-   time the `alembic upgrade head` on a re-seeded copy, or wrap the DDL
-   statements with `time.perf_counter()` in a Code Mode script; report
-   "DDL took X ms on 100k rows (sandbox)".
-9. Present `out/report.md` in chat and STOP — wait for the user's approval.
-10. On approval: `cd demo-app && alembic upgrade 0001:head --sql` (sandbox;
-    `0001:head` applies only the new revision — prod is already at 0001) →
-    `postgres-prod.execute_migration(<that SQL>)`. Verify with `table_schema`
-    + `row_count` after it returns.
-11. PR: github MCP → push modified files to branch `schemaforge/<slug>` →
     create PR (body = safety report + impact mermaid).

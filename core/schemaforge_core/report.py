@@ -36,3 +36,14 @@ def render_report(r: dict) -> str:
     lines.append("- [ ] Query plans acceptable")
     lines.append("- [ ] Approve `execute_ddl` on production? (answer in chat)")
     return "\n".join(lines) + "\n"
+
+
+def render_json(r: dict) -> dict:
+    """Machine-readable subset of the safety report (consumed by the UI)."""
+    return {
+        "alembic_ok": bool(r.get("alembic_ok")),
+        "pytest_ok": bool(r.get("pytest_ok")),
+        "parity_ok": r.get("parity_ok"),  # None when no parity SQL was given
+        "diff": r.get("diff", {}),
+        "explain": r.get("explain", []),
+    }
