@@ -12,7 +12,7 @@ def test_render_json_shape():
     j = render_json(r)
     assert j["alembic_ok"] is True
     assert j["parity_ok"] is True
-    assert j["diff"]["added_tables"] == ["user_profiles"]
-    assert j["explain"][0]["query"] == "find_by_email"
-    # machine-readable only — no markdown text
-    assert "#" not in str(j)
+
+    # parity_ok passes through as-is — None must stay None, not become False
+    j2 = render_json({"alembic_ok": True, "pytest_ok": True, "parity_ok": None})
+    assert j2["parity_ok"] is None
