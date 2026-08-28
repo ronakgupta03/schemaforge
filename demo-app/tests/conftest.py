@@ -13,7 +13,7 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.models import Base, User  # noqa: E402
+from app.models import Base, User, UserProfile  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -25,10 +25,10 @@ def client():
         if not s.query(User).first():
             s.add_all(
                 [
-                    User(name="Ada", email="ada@example.com", address="1 Main St",
-                         date_of_birth="1990-01-01"),
-                    User(name="Bob", email="bob@example.com", address="2 Side St",
-                         date_of_birth=None),
+                    User(name="Ada", email="ada@example.com",
+                         profile=UserProfile(address="1 Main St", date_of_birth="1990-01-01")),
+                    User(name="Bob", email="bob@example.com",
+                         profile=UserProfile(address="2 Side St")),
                 ]
             )
             s.commit()
