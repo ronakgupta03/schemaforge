@@ -5,8 +5,9 @@ import { SafetyReport } from "./SafetyReport";
 import { ChangesPanel } from "./ChangesPanel";
 import { VerificationPanel } from "./VerificationPanel";
 import { ActivityPanel } from "./ActivityPanel";
+import { SettingsPanel } from "./SettingsPanel";
 
-const TABS = ["Impact", "Report", "Changes", "Verification", "Activity"] as const;
+const TABS = ["Impact", "Report", "Changes", "Verification", "Activity", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 
 export function EvidencePanel() {
@@ -62,6 +63,7 @@ export function EvidencePanel() {
         {tab === "Changes" && <ChangesPanel sql={ev.artifacts.sql ?? null} diff={ev.artifacts.diff ?? null} />}
         {tab === "Verification" && <VerificationPanel verify={ev.artifacts.verify ?? null} />}
         {tab === "Activity" && <ActivityPanel activity={ev.activity} />}
+        {tab === "Settings" && <SettingsPanel fetchFn={fetch} />}
       </div>
     </div>
   );
