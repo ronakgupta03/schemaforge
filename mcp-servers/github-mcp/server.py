@@ -171,6 +171,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/config":
+            if not self._authorized():
+                return
             return self._send(200, {"data": {"configured": bool(_config.get("token"))}})
         self._send(404, {"error": "not found"})
 

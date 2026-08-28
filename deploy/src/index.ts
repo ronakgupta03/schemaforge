@@ -154,6 +154,7 @@ async function maybeReplay(e: Env): Promise<void> {
   if (now - lastReplay < 10 * 60 * 1000) return;
   replayPromise = (async () => {
     try {
+      let ok = true;
       if (e.SF_CONFIG_KV) {
         const list = await e.SF_CONFIG_KV.list();
         for (const key of list.keys) {
@@ -167,11 +168,14 @@ async function maybeReplay(e: Env): Promise<void> {
             }
             await containerFetch(e, `http://x.internal${key.name}`, { method: "POST", headers, body }, port);
           } catch (itemErr) {
+            ok = false;
             console.error(`kv replay failed for ${key.name}`, itemErr);
           }
         }
       }
-      lastReplay = Date.now();
+      if (ok) {
+        lastReplay = Date.now();
+      }
     } catch (err) {
       console.error("kv replay failed", err);
     } finally {
