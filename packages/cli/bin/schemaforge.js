@@ -54,6 +54,13 @@ const pgTransportPort = process.env.SF_POSTGRES_PORT || "8001";
 const ghTransportPort = process.env.SF_GITHUB_PORT || "8002";
 const regPort = process.env.SF_REGISTRY_PORT || "9010";
 const configToken = randomBytes(24).toString("hex");
+const tokenFile = join(stateDir, "sf-mcp-token");
+try {
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(tokenFile, configToken, { mode: 0o600 });
+} catch (err) {
+  console.warn(`[schemaforge] failed to write config token file at ${tokenFile}: ${err.message}`);
+}
 
 const kids = [];
 let shuttingDown = false;
@@ -91,10 +98,11 @@ function httpProbe(host, port, path = "/", timeoutMs = 800) {
 }
 
 function spawnAwait(cmd, argv = [], options = {}) {
+  const isWin = process.platform === "win32";
   return new Promise((resolve, reject) => {
     let p;
     try {
-      p = spawn(cmd, argv, options);
+      p = spawn(cmd, argv, { shell: isWin, ...options });
     } catch (err) {
       return reject(err);
     }
@@ -166,6 +174,7 @@ process.on("exit", () => {
 });
 
 function start(cmd, argv = [], env = {}) {
+  const isWin = process.platform === "win32";
   const p = spawn(cmd, argv, {
     cwd: ROOT,
     env: {
@@ -174,7 +183,7 @@ function start(cmd, argv = [], env = {}) {
       SF_INSTRUCTIONS_PATH: instructionsPath,
       ...env,
     },
-    shell: false,
+    shell: isWin,
     stdio: ["ignore", "inherit", "inherit"],
   });
   kids.push(p);
@@ -241,7 +250,7 @@ if (!existsSync(venvReady)) {
 const pgConfigUp = await httpProbe("127.0.0.1", Number(pgConfigPort), "/config");
 const pgTransportUp = await httpProbe("127.0.0.1", Number(pgTransportPort), "/");
 if (pgConfigUp || pgTransportUp) {
-  console.log(`[schemaforge] reusing running postgres-mcp on :${pgTransportPort}`);
+  console.log(`[schemaforge] reusing running postgres-mcp on :${pgTransportPort} — ensure its SF_MCP_CONFIG_TOKEN matches ${tokenFile}`);
 } else {
   start(venvPy, [join(ROOT, "mcp-servers", "postgres-mcp", "server.py")], {
     SF_CONFIG_PORT: pgConfigPort,
@@ -255,7 +264,7 @@ if (pgConfigUp || pgTransportUp) {
 const ghConfigUp = await httpProbe("127.0.0.1", Number(ghConfigPort), "/config");
 const ghTransportUp = await httpProbe("127.0.0.1", Number(ghTransportPort), "/");
 if (ghConfigUp || ghTransportUp) {
-  console.log(`[schemaforge] reusing running github-mcp on :${ghTransportPort}`);
+  console.log(`[schemaforge] reusing running github-mcp on :${ghTransportPort} — ensure its SF_MCP_CONFIG_TOKEN matches ${tokenFile}`);
 } else {
   start(venvPy, [join(ROOT, "mcp-servers", "github-mcp", "server.py")], {
     SF_CONFIG_PORT: ghConfigPort,

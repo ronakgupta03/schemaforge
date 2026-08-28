@@ -2,6 +2,9 @@ import type { FetchFn } from "./sfApi";
 
 let configToken: string | null = null;
 
+// The in-bundle VITE_SF_DEPLOY_TOKEN is a convenience gate for the deployed
+// Worker, NOT real authentication — real access control is Cloudflare Access
+// (see deploy/README.md).
 const deployToken = import.meta.env?.VITE_SF_DEPLOY_TOKEN;
 
 export async function ensureToken(f?: FetchFn): Promise<string | null> {

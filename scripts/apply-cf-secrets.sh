@@ -43,12 +43,14 @@ TOML_PATH="wrangler.toml"
 KV_ID=$(grep -oP 'id = "\K[^"]+' "$TOML_PATH" | head -1 || true)
 if [ -z "$KV_ID" ] || [ "$KV_ID" = "KV_NAMESPACE_ID_PLACEHOLDER" ]; then
   echo "== creating KV namespace SF_CONFIG_KV"
-  KV_OUT=$(npx wrangler kv namespace create SF_CONFIG_KV 2>/dev/null || true)
+  KV_OUT=$(npx wrangler kv namespace create SF_CONFIG_KV 2>/dev/null)
   KV_ID=$(printf '%s' "$KV_OUT" | grep -oP '(?:id = "|id":\s*")\K[^"]+' | head -1 || true)
-  if [ -n "$KV_ID" ]; then
-    echo "== injected KV namespace id: $KV_ID"
-    sed -i "s/KV_NAMESPACE_ID_PLACEHOLDER/$KV_ID/" "$TOML_PATH"
+  if [ -z "$KV_ID" ] || [ "$KV_ID" = "KV_NAMESPACE_ID_PLACEHOLDER" ]; then
+    echo "ERROR: failed to create SF_CONFIG_KV namespace" >&2
+    exit 1
   fi
+  echo "== injected KV namespace id: $KV_ID"
+  sed -i "s/KV_NAMESPACE_ID_PLACEHOLDER/$KV_ID/" "$TOML_PATH"
 fi
 
 secret() {
