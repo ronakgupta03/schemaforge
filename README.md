@@ -95,7 +95,29 @@ explains — it never guesses about code or schema.
 - **Reversible GitHub actions.** PR/branch creation carries no approval
   requirement — merging is still a human action.
 
-## Run it
+## Run it — one command (npx package)
+
+```bash
+npx @schemaforge/schemaforge
+```
+
+Boots the full local stack (TrueForge + postgres-mcp + github-mcp + registry
+ Evidence UI) and opens the browser at http://localhost:5173. Running
+services on the default ports are reused instead of restarted. First run
+creates a Python venv and installs the engine + MCP dependencies.
+
+**Configure everything in the UI — nothing is hardcoded.** The Settings tab
+has five sections:
+
+  models) and pick the agent's active model.
+  be attached to or detached from the agent.
+  (Database URL / DSN) and the GitHub MCP at your own token + repo.
+  verification).
+  and applies it. Unconfigured services are simply omitted: no postgres
+  connector → the agent skips prod introspection/apply; no github connector
+  → it saves `out/diff.patch` instead of a PR. Nothing crashes.
+
+## Run it — full local stack (all components, dev setup)
 
 ```bash
 # 0. One-time environment (creates the .vevn venv the scripts use)
