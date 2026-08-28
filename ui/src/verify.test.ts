@@ -17,6 +17,21 @@ describe("parseVerify", () => {
     expect(parseVerify("not json")).toBeNull();
     expect(parseVerify("")).toBeNull();
   });
+  it("normalizes malformed explain and diff fields", () => {
+    const malformed = JSON.stringify({
+      alembic_ok: true,
+      pytest_ok: true,
+      explain: "oops",
+      diff: null,
+    });
+    const v = parseVerify(malformed);
+    expect(v).not.toBeNull();
+    expect(v?.alembic_ok).toBe(true);
+    expect(v?.pytest_ok).toBe(true);
+    expect(Array.isArray(v?.explain)).toBe(true);
+    expect(v?.explain).toEqual([]);
+    expect(v?.diff).toEqual({});
+  });
 });
 
 describe("badges", () => {

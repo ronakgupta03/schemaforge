@@ -7,7 +7,7 @@ import { EvidencePanel } from "./components/EvidencePanel";
 // session history.
 // Local dev: [::1]:8790 (harness binds IPv6 loopback only).
 // Production: same-origin route serving the TrueForge UI (see deploy/).
-const CHAT_URL = import.meta.env.VITE_CHAT_URL ?? "http://[::1]:8790";
+const CHAT_URL = import.meta.env.VITE_CHAT_URL ?? (import.meta.env.DEV ? "http://[::1]:8790" : "/");
 
 export default function App() {
   return (

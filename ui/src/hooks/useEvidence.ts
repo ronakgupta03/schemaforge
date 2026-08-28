@@ -35,7 +35,8 @@ export function useEvidence(pollMs = 4000): EvidenceState {
   const [state, setState] = useState<EvidenceState>(EMPTY);
   const fetchedArtifacts = useRef<Partial<Record<ArtifactKey, boolean>>>({});
   const seenEvents = useRef<Set<string>>(new Set());
-
+  const lastSessionId = useRef<string | null>(null);
+  const lastTurnId = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -44,11 +45,28 @@ export function useEvidence(pollMs = 4000): EvidenceState {
       try {
         const session = await activeSession();
         if (!session) {
+          if (lastSessionId.current !== null || lastTurnId.current !== null) {
+            lastSessionId.current = null;
+            lastTurnId.current = null;
+            fetchedArtifacts.current = {};
+            seenEvents.current = new Set();
+          }
           if (!cancelled) setState((s) => ({ ...s, loaded: true }));
           schedule(); return;
         }
         const turns = await listTurns(fetch, session.id);
         const turn = turns[0] ?? null;
+
+        const currentSessionId = session.id;
+        const currentTurnId = turn?.id ?? null;
+        const scopeChanged = currentSessionId !== lastSessionId.current || currentTurnId !== lastTurnId.current;
+
+        if (scopeChanged) {
+          lastSessionId.current = currentSessionId;
+          lastTurnId.current = currentTurnId;
+          fetchedArtifacts.current = {};
+          seenEvents.current = new Set();
+        }
 
         let approvalPending = false;
         const freshEvents: ApiEvent[] = [];
@@ -59,7 +77,7 @@ export function useEvidence(pollMs = 4000): EvidenceState {
           }
           const reqs = (turn.state?.required_actions ?? []) as Array<{ type?: string }>;
           approvalPending = reqs.some((a) => a.type === "tool.approval_required") ||
-            freshEvents.some((e) => e.type === "tool.approval_required");
+            events.some((e) => e.type === "tool.approval_required");
         }
 
         const artifacts: EvidenceState["artifacts"] = {};
@@ -75,8 +93,8 @@ export function useEvidence(pollMs = 4000): EvidenceState {
         if (!cancelled) {
           setState((prev) => ({
             session, turn,
-            artifacts: { ...prev.artifacts, ...artifacts },
-            activity: [...prev.activity, ...freshEvents],
+            artifacts: scopeChanged ? artifacts : { ...prev.artifacts, ...artifacts },
+            activity: scopeChanged ? freshEvents : [...prev.activity, ...freshEvents],
             phase: derive(turn, approvalPending),
             approvalPending,
             loaded: true,

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEvidence } from "../hooks/useEvidence";
 import { ImpactGraph } from "./ImpactGraph";
 import { SafetyReport } from "./SafetyReport";
@@ -13,6 +13,23 @@ export function EvidencePanel() {
   const ev = useEvidence();
   const [tab, setTab] = useState<Tab>("Impact");
   const [visited, setVisited] = useState<Set<Tab>>(new Set(["Impact"]));
+
+  const prevApprovalPending = useRef(ev.approvalPending);
+  const prevSessionId = useRef(ev.session?.id);
+  const prevTurnId = useRef(ev.turn?.id);
+
+  useEffect(() => {
+    const approvalJustStarted = !prevApprovalPending.current && ev.approvalPending;
+    const scopeChanged = ev.session?.id !== prevSessionId.current || ev.turn?.id !== prevTurnId.current;
+
+    if (approvalJustStarted || scopeChanged) {
+      setVisited(new Set(["Impact"]));
+    }
+
+    prevApprovalPending.current = ev.approvalPending;
+    prevSessionId.current = ev.session?.id;
+    prevTurnId.current = ev.turn?.id;
+  }, [ev.approvalPending, ev.session?.id, ev.turn?.id]);
   const unReviewed = useMemo(
     () => ev.approvalPending ? TABS.filter((t) => !visited.has(t)) : [],
     [ev.approvalPending, visited],
