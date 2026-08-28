@@ -5,8 +5,6 @@ import { createServer, request as httpRequest } from "node:http";
 import { createReadStream, existsSync, statSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import net from "node:net";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,6 +23,12 @@ const DIST = existsSync(join(PKG_ROOT, "ui-dist"))
   ? join(REPO_ROOT, "ui", "dist")
   : join(PKG_ROOT, "ui-dist");
 
+const instructionsPath = existsSync(join(ROOT, "agent", "instructions.md"))
+  ? join(ROOT, "agent", "instructions.md")
+  : existsSync(join(REPO_ROOT, "agent", "instructions.md"))
+  ? join(REPO_ROOT, "agent", "instructions.md")
+  : join(PKG_ROOT, "agent", "instructions.md");
+
 const args = process.argv.slice(2);
 const noOpen = args.includes("--no-open");
 
@@ -42,7 +46,7 @@ if (stateDirIdx !== -1 && args[stateDirIdx + 1]) {
 
 const py = process.env.SF_PYTHON || "python3";
 const tfPort = process.env.TRUEFORGE_PORT || "8790";
-const tfHost = process.env.TRUEFORGE_HOST || "127.0.0.1";
+const tfHost = process.env.TRUEFORGE_HOST || "::1";
 const pgConfigPort = process.env.SF_POSTGRES_CONFIG_PORT || "9001";
 const ghConfigPort = process.env.SF_GITHUB_CONFIG_PORT || "9002";
 const pgTransportPort = process.env.SF_POSTGRES_PORT || "8001";
@@ -51,10 +55,66 @@ const regPort = process.env.SF_REGISTRY_PORT || "9010";
 
 const kids = [];
 let shuttingDown = false;
+let server = null;
+
+function httpProbe(host, port, path = "/", timeoutMs = 800) {
+  return new Promise((resolve) => {
+    const isIpv6 = host.includes(":") && !host.startsWith("[");
+    const formattedHost = isIpv6 ? `[${host}]` : host;
+    const req = httpRequest(
+      {
+        host,
+        port: Number(port),
+        path,
+        method: "GET",
+        headers: {
+          Host: `${formattedHost}:${port}`,
+        },
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        res.resume();
+        resolve(code >= 200 && code < 500);
+      }
+    );
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => {
+      resolve(false);
+    });
+    req.end();
+  });
+}
+
+function spawnAwait(cmd, argv = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    let p;
+    try {
+      p = spawn(cmd, argv, options);
+    } catch (err) {
+      return reject(err);
+    }
+    p.on("error", (err) => reject(err));
+    p.on("exit", (code, signal) => {
+      resolve(code ?? (signal ? 1 : 0));
+    });
+  });
+}
 
 function cleanupAndExit(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
+
+  if (server) {
+    try {
+      server.close();
+    } catch {
+      // ignore
+    }
+  }
+
   for (const k of kids) {
     try {
       k.kill("SIGTERM");
@@ -62,7 +122,8 @@ function cleanupAndExit(code = 0) {
       // ignore
     }
   }
-  setTimeout(() => {
+
+  const timer = setTimeout(() => {
     for (const k of kids) {
       try {
         k.kill("SIGKILL");
@@ -71,8 +132,23 @@ function cleanupAndExit(code = 0) {
       }
     }
     process.exit(code);
-  }, 2000).unref();
-  process.exit(code);
+  }, 2000);
+  timer.unref();
+
+  let pending = kids.length;
+  if (pending === 0) {
+    clearTimeout(timer);
+    process.exit(code);
+  }
+  for (const k of kids) {
+    k.on("exit", () => {
+      pending--;
+      if (pending <= 0) {
+        clearTimeout(timer);
+        process.exit(code);
+      }
+    });
+  }
 }
 
 process.on("SIGINT", () => cleanupAndExit(0));
@@ -93,6 +169,7 @@ function start(cmd, argv = [], env = {}) {
     env: {
       ...process.env,
       SF_STATE_DIR: stateDir,
+      SF_INSTRUCTIONS_PATH: instructionsPath,
       ...env,
     },
     shell: false,
@@ -101,7 +178,8 @@ function start(cmd, argv = [], env = {}) {
   kids.push(p);
   p.on("exit", (code, signal) => {
     if (code !== 0 && code !== null && !shuttingDown) {
-      console.warn(`[schemaforge] child process (${cmd}) exited with code ${code}`);
+      console.error(`[schemaforge] backend child process (${cmd}) exited with code ${code} — shutting down stack`);
+      cleanupAndExit(code);
     }
   });
   return p;
@@ -120,10 +198,15 @@ if (!existsSync(venvReady)) {
     rmSync(venvDir, { recursive: true, force: true });
   }
   mkdirSync(stateDir, { recursive: true });
-  const venvProc = spawn(py, ["-m", "venv", venvDir], { stdio: "inherit" });
-  const [venvExit] = await once(venvProc, "exit");
-  if (venvExit !== 0) {
-    console.error(`[schemaforge] failed to create venv (exit code ${venvExit})`);
+
+  try {
+    const venvExit = await spawnAwait(py, ["-m", "venv", venvDir], { stdio: "inherit" });
+    if (venvExit !== 0) {
+      console.error(`[schemaforge] failed to create venv with python interpreter '${py}' (exit code ${venvExit})`);
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error(`[schemaforge] failed to run python '${py}': ${err.message}. Please install Python 3.10+ or set SF_PYTHON.`);
     process.exit(1);
   }
 
@@ -137,10 +220,14 @@ if (!existsSync(venvReady)) {
     pipArgs.push("-r", ghReq);
   }
 
-  const pipProc = spawn(venvPip, pipArgs, { stdio: "inherit" });
-  const [pipExit] = await once(pipProc, "exit");
-  if (pipExit !== 0) {
-    console.error(`[schemaforge] failed to install dependencies (exit code ${pipExit})`);
+  try {
+    const pipExit = await spawnAwait(venvPip, pipArgs, { stdio: "inherit" });
+    if (pipExit !== 0) {
+      console.error(`[schemaforge] failed to install dependencies in venv (exit code ${pipExit})`);
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error(`[schemaforge] failed to run pip in venv: ${err.message}`);
     process.exit(1);
   }
 
@@ -149,32 +236,40 @@ if (!existsSync(venvReady)) {
 }
 
 // 2. services
-if (await portInUse(Number(pgTransportPort))) {
+const pgConfigUp = await httpProbe("127.0.0.1", Number(pgConfigPort), "/config");
+const pgTransportUp = await httpProbe("127.0.0.1", Number(pgTransportPort), "/");
+if (pgConfigUp || pgTransportUp) {
   console.log(`[schemaforge] reusing running postgres-mcp on :${pgTransportPort}`);
 } else {
   start(venvPy, [join(ROOT, "mcp-servers", "postgres-mcp", "server.py")], {
     SF_CONFIG_PORT: pgConfigPort,
+    SF_CONFIG_HOST: "0.0.0.0",
     PORT: pgTransportPort,
     DATABASE_URL: process.env.DATABASE_URL || "",
   });
 }
 
-if (await portInUse(Number(ghTransportPort))) {
+const ghConfigUp = await httpProbe("127.0.0.1", Number(ghConfigPort), "/config");
+const ghTransportUp = await httpProbe("127.0.0.1", Number(ghTransportPort), "/");
+if (ghConfigUp || ghTransportUp) {
   console.log(`[schemaforge] reusing running github-mcp on :${ghTransportPort}`);
 } else {
   start(venvPy, [join(ROOT, "mcp-servers", "github-mcp", "server.py")], {
     SF_CONFIG_PORT: ghConfigPort,
+    SF_CONFIG_HOST: "0.0.0.0",
     PORT: ghTransportPort,
     GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "",
   });
 }
 
 const regServerFile = join(ROOT, "core", "schemaforge_core", "registry_server.py");
-if (await portInUse(Number(regPort))) {
+if (await httpProbe("127.0.0.1", Number(regPort), "/health")) {
   console.log(`[schemaforge] reusing running registry on :${regPort}`);
 } else if (existsSync(regServerFile)) {
   start(venvPy, ["-m", "schemaforge_core.registry_server"], {
     SF_REGISTRY_PORT: regPort,
+    SF_REGISTRY_HOST: "127.0.0.1",
+    SF_INSTRUCTIONS_PATH: instructionsPath,
     TRUEFORGE_URL: `http://localhost:${tfPort}`,
   });
 } else {
@@ -208,26 +303,22 @@ HTTPServer(('127.0.0.1', port), Handler).serve_forever()
 `;
   start(venvPy, ["-c", inlineRegistryPy], {
     SF_REGISTRY_PORT: regPort,
+    SF_REGISTRY_HOST: "127.0.0.1",
     TRUEFORGE_URL: `http://localhost:${tfPort}`,
   });
 }
 
-// 3. TrueForge (standalone) — reuse a running instance instead of crashing
-// on EADDRINUSE (the operator may already have TrueForge up).
-async function portInUse(port) {
-  try {
-    const s = net.connect(port, "127.0.0.1");
-    await once(s, "connect");
-    s.destroy();
-    return true;
-  } catch {
-    return false;
-  }
-}
+// 3. TrueForge (standalone) — probe both IPv6 and IPv4, reuse if present
+let tfProxyHost = "::1";
 
-if (await portInUse(Number(tfPort))) {
-  console.log(`[schemaforge] reusing running TrueForge on :${tfPort}`);
+if (await httpProbe("::1", Number(tfPort), "/api/v1/capabilities")) {
+  tfProxyHost = "::1";
+  console.log(`[schemaforge] reusing running TrueForge on [::1]:${tfPort}`);
+} else if (await httpProbe("127.0.0.1", Number(tfPort), "/api/v1/capabilities")) {
+  tfProxyHost = "127.0.0.1";
+  console.log(`[schemaforge] reusing running TrueForge on 127.0.0.1:${tfPort}`);
 } else {
+  tfProxyHost = tfHost.includes(":") && !tfHost.startsWith("[") ? tfHost : tfHost;
   start("npx", ["@truefoundry/trueforge"], {
     STANDALONE: "true",
     PORT: tfPort,
@@ -235,7 +326,67 @@ if (await portInUse(Number(tfPort))) {
   });
 }
 
-// 4. static UI + proxy
+// 4. Provision apply-agent (best effort after startup)
+async function bootstrapApplyAgent(regPort, maxWaitMs = 15000) {
+  const start = Date.now();
+  let regUp = false;
+  while (Date.now() - start < maxWaitMs) {
+    if (await httpProbe("127.0.0.1", Number(regPort), "/health", 500)) {
+      regUp = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  if (!regUp) {
+    console.warn("[schemaforge] registry not reachable for agent provisioning");
+    return;
+  }
+
+  // Small delay for TrueForge backend initialization
+  await new Promise((r) => setTimeout(r, 600));
+
+  try {
+    const data = JSON.stringify({});
+    const res = await new Promise((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: Number(regPort),
+          path: "/apply-agent",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(data),
+          },
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk) => {
+            body += chunk;
+          });
+          res.on("end", () => resolve({ statusCode: res.statusCode, body }));
+        }
+      );
+      req.setTimeout(8000, () => {
+        req.destroy();
+        reject(new Error("timeout"));
+      });
+      req.on("error", reject);
+      req.write(data);
+      req.end();
+    });
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      console.log("[schemaforge] agent registered successfully (apply-agent)");
+    } else {
+      console.warn(`[schemaforge] apply-agent non-fatal response (${res.statusCode}): ${res.body}`);
+    }
+  } catch (err) {
+    console.warn(`[schemaforge] apply-agent notice: ${err.message}`);
+  }
+}
+
+// 5. static UI + proxy
 function getProxyTarget(urlPath) {
   const [pathname, search = ""] = urlPath.split("?");
   const query = search ? `?${search}` : "";
@@ -269,7 +420,7 @@ function getProxyTarget(urlPath) {
 
   if (pathname === "/api" || pathname.startsWith("/api/")) {
     return {
-      host: "::1",
+      host: tfProxyHost,
       port: Number(tfPort),
       path: pathname + query,
     };
@@ -295,7 +446,7 @@ const MIME = {
   ".txt": "text/plain",
 };
 
-const server = createServer((req, res) => {
+server = createServer((req, res) => {
   const target = getProxyTarget(req.url || "/");
   if (target) {
     const headers = { ...req.headers };
@@ -329,7 +480,17 @@ const server = createServer((req, res) => {
     return;
   }
 
-  let reqPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  let reqPath;
+  try {
+    reqPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("Bad Request: Malformed URI");
+    }
+    return;
+  }
+
   let filePath = normalize(join(DIST, reqPath === "/" ? "index.html" : reqPath));
 
   if (!filePath.startsWith(DIST)) {
@@ -354,6 +515,7 @@ const server = createServer((req, res) => {
 
 server.listen(uiPort, "127.0.0.1", () => {
   console.log(`[schemaforge] UI at http://localhost:${uiPort} (TrueForge ${tfPort}, registry ${regPort}, mcp ${pgTransportPort}/${ghTransportPort})`);
+  bootstrapApplyAgent(regPort).catch(() => {});
   if (!noOpen) {
     if (process.platform === "darwin") {
       spawn("open", [`http://localhost:${uiPort}`], { stdio: "ignore" }).on("error", () => {});

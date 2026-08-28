@@ -109,13 +109,11 @@ creates a Python venv and installs the engine + MCP dependencies.
 **Configure everything in the UI — nothing is hardcoded.** The Settings tab
 has five sections:
 
-  models) and pick the agent's active model.
-  be attached to or detached from the agent.
-  (Database URL / DSN) and the GitHub MCP at your own token + repo.
-  verification).
-  and applies it. Unconfigured services are simply omitted: no postgres
-  connector → the agent skips prod introspection/apply; no github connector
-  → it saves `out/diff.patch` instead of a PR. Nothing crashes.
+1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
+2. **MCP Servers**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
+3. **Connectors**: Set up the production PostgreSQL connection (database DSN / URL) and the GitHub connector with your token and repository.
+4. **Sandbox**: Enable or disable the Daytona sandbox environment used for isolated migration execution and verification.
+5. **Apply Agent**: Re-generate the agent manifest and apply it to TrueForge. Unconfigured services are simply omitted: without a Postgres connector, the agent skips prod introspection and apply; without a GitHub connector, it saves `out/diff.patch` locally instead of opening a PR. Nothing crashes.
 
 ## Run it — full local stack (all components, dev setup)
 

@@ -15,6 +15,7 @@
   ],
   "engines": { "node": ">=20" },
   "scripts": {
+    "prepack": "node scripts/prepack.mjs",
     "build": "cd ../../ui && npm run build && rm -rf ../packages/cli/ui-dist && cp -r dist ../packages/cli/ui-dist"
   }
 }
