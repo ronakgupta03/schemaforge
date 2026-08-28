@@ -53,9 +53,9 @@ Any user request to change the Postgres schema of `demo-app`
    (0002) + code edits. Write a parity SQL file for THIS change.
    Stage the new migration as intent-to-add so it appears in the diff:
    `git add -N demo-app/alembic/versions/0002_split_users.py` (intent-to-add;
-   do NOT fully stage unrelated dirt), then `git diff > /workspace/out/diff.patch`
-   (code changes only — the diff the UI shows).
+   do NOT fully stage unrelated dirt).
 7. Verify in the sandbox: `sf-pipeline verify --dir demo-app --dsn $DATABASE_URL --baseline out/db_before.json --parity-sql <parity file> --queries demo-app/queries/bench.sql --explain-before out/explain_before.json --out out/report.md` — this writes out/report.md AND out/verify.json (the machine-readable evidence the UI renders). Confirm alembic migration PASS, tests PASS, parity PASS before continuing.
+   Then, after verification passes: `git add -N demo-app/alembic/versions/0002_split_users.py` (if not already) && `git diff > /workspace/out/diff.patch` (code changes only — the diff the UI shows).
 8. Present `out/report.md` in chat and PAUSE: call `ask_user_question`
    with options Approve / Deny / Request changes — do not end the turn
    silently after the report. Wait for the user's answer.
