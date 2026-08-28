@@ -5,7 +5,7 @@
 #   - `cd deploy && npx wrangler login` done (interactive browser auth)
 #   - REDIS_URL exported (external managed Redis: Upstash / Redis Cloud —
 #     containers cannot reach a Redis container; outbound intercepts HTTP only)
-#   - .env present with DAYTONA_API_KEY, CLOUDFLARE_AUTH_TOKEN,
+#   - .env present with CLOUDFLARE_AUTH_TOKEN,
 #     CLOUDFLARE_ACCOUNT_ID, GITHUB_REPO_URL (optional: SF_MCP_CONFIG_TOKEN; generated if unset)
 #   - NEON_CONNECTION_URL set (owner connection URL; see .env.example). POSTGRES_DB is 'trueforge'.
 
@@ -28,7 +28,7 @@ user = u.username or "neondb_owner"
 pw = u.password or ""
 host = u.hostname or ""
 port = u.port or 5432
-print(user); print(pw); print(host); print(port)
+print(f"{user} {pw} {host} {port}")
 ')
 EOF
 
@@ -52,7 +52,6 @@ secret POSTGRES_DB "trueforge"
 secret REDIS_URL "$REDIS_URL"
 sf_mcp_config_token="${SF_MCP_CONFIG_TOKEN:-$(openssl rand -hex 24)}"
 secret SF_MCP_CONFIG_TOKEN "$sf_mcp_config_token"
-secret DAYTONA_API_KEY "${DAYTONA_API_KEY:?set DAYTONA_API_KEY in .env}"
 secret CLOUDFLARE_AUTH_TOKEN "${CLOUDFLARE_AUTH_TOKEN:?set CLOUDFLARE_AUTH_TOKEN in .env}"
 secret CLOUDFLARE_ACCOUNT_ID "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID in .env}"
 
