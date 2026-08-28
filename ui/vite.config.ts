@@ -14,6 +14,12 @@ export default defineConfig({
       "react-dom",
     ],
   },
+  build: {
+    // Cloudflare deploy: /assets/* is routed to the TrueForge container (its
+    // UI references absolute /assets/*), so the SPA's own bundles live under
+    // /static/* to avoid the collision.
+    assetsDir: "static",
+  },
   server: {
     host: true,
     port: 5173,

@@ -5,9 +5,8 @@ import { EvidencePanel } from "./components/EvidencePanel";
 // across React 18/19, dev/prod, and all dedupe configs; the server's bundled
 // build works). Embedding it keeps the full product chat: streaming, approvals,
 // session history.
-// Local dev: [::1]:8790 (harness binds IPv6 loopback only).
-// Production: same-origin route serving the TrueForge UI (see deploy/).
-const CHAT_URL = import.meta.env.VITE_CHAT_URL ?? (import.meta.env.DEV ? "http://[::1]:8790" : "/");
+// Production: same-origin /tf/ route serving the TrueForge UI (see deploy/).
+const CHAT_URL = import.meta.env.VITE_CHAT_URL ?? (import.meta.env.DEV ? "http://[::1]:8790" : "/tf/");
 
 export default function App() {
   return (
