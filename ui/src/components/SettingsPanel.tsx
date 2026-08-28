@@ -255,9 +255,10 @@ export function SettingsPanel({ fetchFn = fetch }: SettingsPanelProps) {
       type: "daytona",
       auth: { api_key: daytonaApiKey },
       exec_timeout_ms: Number(daytonaExecTimeout),
-      auto_stop: daytonaAutoStop,
-      auto_archive: daytonaAutoArchive,
-      auto_delete: daytonaAutoDelete,
+      // Interval durations in minutes; 0 disables (verified schema).
+      auto_stop: daytonaAutoStop ? 30 : 0,
+      auto_archive: daytonaAutoArchive ? 1440 : 0,
+      auto_delete: daytonaAutoDelete ? 10080 : 0,
     };
     try {
       const res = await upsertSandboxProvider(fetchFn, manifest);

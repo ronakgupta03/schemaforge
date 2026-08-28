@@ -9,6 +9,7 @@ import { SettingsPanel } from "./SettingsPanel";
 
 const TABS = ["Impact", "Report", "Changes", "Verification", "Activity", "Settings"] as const;
 type Tab = (typeof TABS)[number];
+const EVIDENCE_TABS: Tab[] = TABS.filter((t) => t !== "Settings");
 
 export function EvidencePanel() {
   const ev = useEvidence();
@@ -32,7 +33,7 @@ export function EvidencePanel() {
     prevTurnId.current = ev.turn?.id;
   }, [ev.approvalPending, ev.session?.id, ev.turn?.id]);
   const unReviewed = useMemo(
-    () => ev.approvalPending ? TABS.filter((t) => !visited.has(t)) : [],
+    () => ev.approvalPending ? EVIDENCE_TABS.filter((t) => !visited.has(t as Tab)) : [],
     [ev.approvalPending, visited],
   );
 
