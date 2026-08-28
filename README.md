@@ -57,16 +57,16 @@ explains — it never guesses about code or schema.
 
 ## Repo layout
 
-| Path | What |
-|---|---|
-| `agent/instructions.md` | Root-agent system prompt (workflow, hard rules) |
-| `skills/schemaforge-migration/` | TrueForge skill: the migration workflow |
-| `core/` | `schemaforge_core` — deterministic engine + `sf-pipeline` CLI (snapshot, facts, graph, impact, verify, bench) |
-| `demo-app/` | FastAPI + SQLAlchemy 2.0 + Alembic bookstore (the demo target) |
-| `reference/post-split/` | Golden post-split outcome (migration, models, parity SQL) |
-| `mcp-servers/postgres-mcp/` | Production-Postgres MCP server (read tools + gated `execute_migration`/`execute_ddl`) |
-| `mcp-servers/github-mcp/` | GitHub MCP (branch / write_file / open_pull_request — reversible only) |
-| `scripts/` | `apply_agent.py`, `import_skill.py`, `sandbox_setup.sh`, `seed_prod.sh`, `run_mcp_servers.sh` |
+| Path                              | What                                                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `agent/instructions.md`         | Root-agent system prompt (workflow, hard rules)                                                                    |
+| `skills/schemaforge-migration/` | TrueForge skill: the migration workflow                                                                            |
+| `core/`                         | `schemaforge_core` — deterministic engine + `sf-pipeline` CLI (snapshot, facts, graph, impact, verify, bench) |
+| `demo-app/`                     | FastAPI + SQLAlchemy 2.0 + Alembic bookstore (the demo target)                                                     |
+| `reference/post-split/`         | Golden post-split outcome (migration, models, parity SQL)                                                          |
+| `mcp-servers/postgres-mcp/`     | Production-Postgres MCP server (read tools + gated`execute_migration`/`execute_ddl`)                           |
+| `mcp-servers/github-mcp/`       | GitHub MCP (branch / write_file / open_pull_request — reversible only)                                            |
+| `scripts/`                      | `apply_agent.py`, `import_skill.py`, `sandbox_setup.sh`, `seed_prod.sh`, `run_mcp_servers.sh`            |
 
 ## Safety model
 
@@ -107,7 +107,8 @@ uv pip install --python .vevn/bin/python -r mcp-servers/github-mcp/requirements.
 
 # 1. Services
 bash scripts/run_mcp_servers.sh      # postgres-mcp :8001, github-mcp :8002
-npx @truefoundry/trueforge           # harness on [::1]:8790 (SQLite local mode)
+SERVER_EXECUTION_TIMEOUT_SECONDS=1800 npx @truefoundry/trueforge
+scripts/patch-trueforge-mermaid.py   # harness on [::1]:8790 (SQLite local mode)
 
 # 2. Provision prod (pre-split baseline: alembic 0001, 200k users / 5k books)
 docker compose -f scripts/prod-postgres/docker-compose.yml up -d
@@ -140,17 +141,17 @@ Qodo** before merge (direct pushes are docs-only). Representative PRs:
 Qodo surfaced **9 findings across 4 review rounds** (6 initial + 3 from
 re-reviews); each was fixed and re-reviewed to **Bugs 0**:
 
-| Finding (severity) | What Qodo caught | Resolution |
-|---|---|---|
-| `run_postgres()` removed (High) | Edit regression deleted the postgres-runner helper | Restored; 6 call sites verified |
-| Impact command lacks `--db/--code` (High) | instructions told the agent to run a broken command | Fixed in instructions + skill |
-| Migration SQL rejected (High) | `execute_ddl` rejected backfills + `alembic_version` stamping | **New `execute_migration` tool**: one transaction with rollback, DDL + `INSERT…SELECT` + stamping |
-| Offline SQL replays baseline (High) | `alembic upgrade head --sql` regenerates 0001 | Approval SQL now `alembic upgrade 0001:head --sql` |
-| DDL batches can partially apply (High) | non-atomic multi-statement apply | Single transaction, rollback live-proven (failing stmt → zero partial state) |
-| Snapshot fields unavailable (Medium) | `table_schema` lacked defaults/indexes/FKs | Enriched to the engine's exact snapshot shape |
-| SQL literals split on `;` (High) | naive `split(";")` fragments strings | Comment/dollar-quote-aware `_split_statements` scanner |
-| Indexes cross schema boundaries (Medium) | index/FK queries unqualified by schema | Schema-qualified to `'public'` (`relnamespace`, `table_schema`) |
-| Primary keys disappear (High) | `ix.indisprimary` filtered out PK indexes | Removed filter; `users_pkey` present in `indexes` |
+| Finding (severity)                         | What Qodo caught                                                  | Resolution                                                                                                   |
+| ------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `run_postgres()` removed (High)          | Edit regression deleted the postgres-runner helper                | Restored; 6 call sites verified                                                                              |
+| Impact command lacks`--db/--code` (High) | instructions told the agent to run a broken command               | Fixed in instructions + skill                                                                                |
+| Migration SQL rejected (High)              | `execute_ddl` rejected backfills + `alembic_version` stamping | **New `execute_migration` tool**: one transaction with rollback, DDL + `INSERT…SELECT` + stamping |
+| Offline SQL replays baseline (High)        | `alembic upgrade head --sql` regenerates 0001                   | Approval SQL now`alembic upgrade 0001:head --sql`                                                          |
+| DDL batches can partially apply (High)     | non-atomic multi-statement apply                                  | Single transaction, rollback live-proven (failing stmt → zero partial state)                                |
+| Snapshot fields unavailable (Medium)       | `table_schema` lacked defaults/indexes/FKs                      | Enriched to the engine's exact snapshot shape                                                                |
+| SQL literals split on`;` (High)          | naive`split(";")` fragments strings                             | Comment/dollar-quote-aware`_split_statements` scanner                                                      |
+| Indexes cross schema boundaries (Medium)   | index/FK queries unqualified by schema                            | Schema-qualified to`'public'` (`relnamespace`, `table_schema`)                                         |
+| Primary keys disappear (High)              | `ix.indisprimary` filtered out PK indexes                       | Removed filter;`users_pkey` present in `indexes`                                                         |
 
 ### PR #12 — Sandbox rehearsal (`feat/sandbox-rehearsal`, merged `7a3a739`)
 
