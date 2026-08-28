@@ -174,8 +174,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 ```tsx
 import { TrueForgeUI, createTrueFoundryServer } from "@truefoundry/trueforge-ui";
 import { EvidencePanel } from "./components/EvidencePanel";
-
-const server = createTrueFoundryServer({ type: "trueforge", baseUrl: "/" });
+// createTrueFoundryServer() needs a full adapter; for the local harness the
+// built-in config form IS the valid server prop (TrueForgeServerConfig =
+// TrueForgeBuiltInServerConfig | AgentUIServer per the installed d.ts).
+const server = { type: "trueforge", baseUrl: "/" } as const;
 const theme = {
   preset: "Custom" as const,
   mode: "dark" as const,
