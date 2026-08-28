@@ -530,11 +530,45 @@ const MIME = {
   ".map": "application/json",
   ".txt": "text/plain",
 };
+function isCsrfForbidden(req, servingPort) {
+  const secFetchSite = req.headers["sec-fetch-site"];
+  if (secFetchSite === "cross-site") {
+    return true;
+  }
+  const origin = req.headers["origin"];
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      const host = url.hostname;
+      const port = url.port || (url.protocol === "https:" ? "443" : "80");
+      const allowedHosts = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+      if (!allowedHosts.has(host) || port !== String(servingPort)) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 
 server = createServer((req, res) => {
   const reqUrl = req.url || "/";
   const [pathname] = reqUrl.split("?");
 
+  const isCsrfTarget =
+    pathname === "/api/sf/config-token" ||
+    pathname === "/api/sf/apply-agent" ||
+    pathname.startsWith("/api/sf/apply-agent/") ||
+    pathname === "/api/sf/config" ||
+    pathname.startsWith("/api/sf/config/");
+
+  if (isCsrfTarget && isCsrfForbidden(req, uiPort)) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Forbidden: cross-site request rejected" }));
+    return;
+  }
   if (pathname === "/api/sf/config-token") {
     if (existsSync(tokenFile)) {
       try {
