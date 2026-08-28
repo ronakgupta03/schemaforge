@@ -204,6 +204,9 @@ def run_config_server(host: str = "127.0.0.1") -> None:
 
 
 if __name__ == "__main__":
+    import threading
+
+    threading.Thread(target=run_config_server, daemon=True).start()
     mcp.settings.host = "0.0.0.0"
     # Cloudflare containers: outbound interception is HTTP(S) ports 80/443
     # only, so the deployed container listens on 80 (PORT env from the

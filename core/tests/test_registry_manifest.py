@@ -70,3 +70,31 @@ def test_approval_override():
 def test_policy_constants():
     assert APPROVAL_POLICY["postgres-prod"] == ["@write", "@destructive"]
     assert PRELOAD_SERVERS == {"postgres-prod"}
+
+
+def test_enabled_servers_list_filters():
+    snap = SettingsSnapshot(
+        mcp_servers=[
+            {"name": "postgres-prod", "url": "http://x/mcp", "description": ""},
+            {"name": "github", "url": "http://y/mcp", "description": ""},
+        ],
+        models=["cloudflare/deepseek-v4-flash"],
+        sandbox_enabled=True,
+    )
+    m = build_manifest(snap, INSTRUCTIONS, model_fqn=None, overrides={}, enabled_servers=["postgres-prod"])
+    names = [s["name"] for s in m["mcp_servers"]]
+    assert names == ["postgres-prod"]
+
+
+def test_explicit_enabled_false_overrides_list():
+    snap = SettingsSnapshot(
+        mcp_servers=[
+            {"name": "postgres-prod", "url": "http://x/mcp", "description": "", "enabled": False},
+            {"name": "github", "url": "http://y/mcp", "description": ""},
+        ],
+        models=["cloudflare/deepseek-v4-flash"],
+        sandbox_enabled=True,
+    )
+    m = build_manifest(snap, INSTRUCTIONS, model_fqn=None, overrides={}, enabled_servers=["postgres-prod", "github"])
+    names = [s["name"] for s in m["mcp_servers"]]
+    assert names == ["github"]
