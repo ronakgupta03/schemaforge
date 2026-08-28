@@ -63,7 +63,7 @@ def fetch_snapshot(
         if enabled_servers is not None:
             d["enabled"] = s.get("name") in enabled_servers
         elif live_enabled:
-            d["enabled"] = live_enabled.get(s.get("name"), True)
+            d["enabled"] = live_enabled.get(s.get("name"), False)
         mcp_servers.append(d)
     return SettingsSnapshot(
         mcp_servers=mcp_servers,
