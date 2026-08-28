@@ -144,7 +144,41 @@ const REPLAY_PATHS: Record<string, number> = {
   "/api/sf/apply-agent": 9010,
 };
 
-let replayed = false;
+let replayPromise: Promise<void> | null = null;
+let lastReplay = 0;
+
+async function maybeReplay(e: Env): Promise<void> {
+  const now = Date.now();
+  if (replayPromise) return replayPromise;
+  if (now - lastReplay < 10 * 60 * 1000) return;
+  replayPromise = (async () => {
+    try {
+      if (e.SF_CONFIG_KV) {
+        const list = await e.SF_CONFIG_KV.list();
+        for (const key of list.keys) {
+          try {
+            const body = await e.SF_CONFIG_KV.get(key.name);
+            const port = REPLAY_PATHS[key.name];
+            if (!body || !port) continue;
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (key.name.startsWith("/api/sf/config/") && e.SF_MCP_CONFIG_TOKEN) {
+              headers["Authorization"] = `Bearer ${e.SF_MCP_CONFIG_TOKEN}`;
+            }
+            await containerFetch(e, `http://x.internal${key.name}`, { method: "POST", headers, body }, port);
+          } catch (itemErr) {
+            console.error(`kv replay failed for ${key.name}`, itemErr);
+          }
+        }
+      }
+      lastReplay = Date.now();
+    } catch (err) {
+      console.error("kv replay failed", err);
+    } finally {
+      replayPromise = null;
+    }
+  })();
+  return replayPromise;
+}
 
 async function containerFetch(
   e: Env,
@@ -196,29 +230,8 @@ export default {
       }
     }
 
-    if (!replayed && (p === "/api/sf" || p.startsWith("/api/sf/"))) {
-      replayed = true;
-      if (e.SF_CONFIG_KV) {
-        try {
-          const list = await e.SF_CONFIG_KV.list();
-          for (const key of list.keys) {
-            try {
-              const body = await e.SF_CONFIG_KV.get(key.name);
-              const port = REPLAY_PATHS[key.name];
-              if (!body || !port) continue;
-              const headers: Record<string, string> = { "Content-Type": "application/json" };
-              if (key.name.startsWith("/api/sf/config/") && e.SF_MCP_CONFIG_TOKEN) {
-                headers["Authorization"] = `Bearer ${e.SF_MCP_CONFIG_TOKEN}`;
-              }
-              await containerFetch(e, `http://x.internal${key.name}`, { method: "POST", headers, body }, port);
-            } catch (itemErr) {
-              console.error(`kv replay failed for ${key.name}`, itemErr);
-            }
-          }
-        } catch (err) {
-          console.error("kv replay failed", err);
-        }
-      }
+    if (p === "/api/sf" || p.startsWith("/api/sf/")) {
+      await maybeReplay(e);
     }
 
     let replayBody: string | null = null;
