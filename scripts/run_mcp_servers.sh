@@ -22,4 +22,9 @@ GITHUB_PERSONAL_ACCESS_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:?set in .env}" \
   .vevn/bin/python mcp-servers/github-mcp/server.py &
 GH_PID=$!
 
+echo "[sf-registry] starting on :9010 (Settings tab backend)"
+TRUEFORGE_URL="${TRUEFORGE_URL:-http://localhost:8790}" \
+  .vevn/bin/python -m schemaforge_core.registry_server &
+REG_PID=$!
+
 wait

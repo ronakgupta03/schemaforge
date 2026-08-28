@@ -13,7 +13,7 @@ export type ArtifactResult =
   | { status: "pending" }
   | { status: "gone" };
 
-type FetchFn = typeof fetch;
+export type FetchFn = typeof fetch;
 
 async function getJson<T>(fetchFn: FetchFn, path: string): Promise<T> {
   const res = await fetchFn(path);

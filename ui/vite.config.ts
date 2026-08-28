@@ -24,6 +24,9 @@ export default defineConfig({
     host: true,
     port: 5173,
     proxy: {
+      "/api/sf/config/postgres-mcp": { target: "http://127.0.0.1:9001", changeOrigin: false },
+      "/api/sf/config/github-mcp": { target: "http://127.0.0.1:9002", changeOrigin: false },
+      "/api/sf": { target: "http://127.0.0.1:9010", changeOrigin: false },
       "/api": { target: "http://[::1]:8790", changeOrigin: false },
     },
   },
