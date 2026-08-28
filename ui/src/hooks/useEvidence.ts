@@ -51,7 +51,7 @@ export function useEvidence(pollMs = 4000): EvidenceState {
             fetchedArtifacts.current = {};
             seenEvents.current = new Set();
           }
-          if (!cancelled) setState((s) => ({ ...s, loaded: true }));
+          if (!cancelled) setState(() => ({ session: null, turn: null, artifacts: {}, activity: [], phase: "idle", approvalPending: false, loaded: true }));
           schedule(); return;
         }
         const turns = await listTurns(fetch, session.id);
@@ -76,8 +76,7 @@ export function useEvidence(pollMs = 4000): EvidenceState {
             if (!seenEvents.current.has(e.id)) { seenEvents.current.add(e.id); freshEvents.push(e); }
           }
           const reqs = (turn.state?.required_actions ?? []) as Array<{ type?: string }>;
-          approvalPending = reqs.some((a) => a.type === "tool.approval_required") ||
-            events.some((e) => e.type === "tool.approval_required");
+          approvalPending = reqs.some((a) => a.type === "tool.approval_required");
         }
 
         const artifacts: EvidenceState["artifacts"] = {};

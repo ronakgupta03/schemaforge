@@ -68,17 +68,49 @@ it("resets artifacts and activity when the turn changes", async () => {
   expect(sf.downloadArtifact).toHaveBeenCalledWith(expect.anything(), "s1", "t2", ARTIFACT_PATHS.graph);
 });
 
-it("keeps approvalPending true across multiple polls when event was seen on first poll", async () => {
-  let pollCount = 0;
+it("sets approvalPending based on required_actions alone (clears when required_actions is empty even if approval event exists)", async () => {
+  let currentTurn: sf.Turn = pausedTurn;
   vi.spyOn(sf, "listSessions").mockResolvedValue([session]);
-  vi.spyOn(sf, "listTurns").mockResolvedValue([runningTurn]);
-  vi.spyOn(sf, "listEvents").mockImplementation(async () => {
-    pollCount++;
-    return [{ id: "e_appr", type: "tool.approval_required", session_id: "s1", turn_id: "t1", thread_id: null, created_at: "", data: {} }];
-  });
+  vi.spyOn(sf, "listTurns").mockImplementation(async () => [currentTurn]);
+  vi.spyOn(sf, "listEvents").mockResolvedValue([
+    { id: "e_appr", type: "tool.approval_required", session_id: "s1", turn_id: "t1", thread_id: null, created_at: "", data: {} },
+  ]);
   vi.spyOn(sf, "downloadArtifact").mockResolvedValue({ status: "pending" });
 
   const { result } = renderHook(() => useEvidence(10));
-  await waitFor(() => expect(pollCount).toBeGreaterThanOrEqual(2));
-  expect(result.current.approvalPending).toBe(true);
+  await waitFor(() => expect(result.current.approvalPending).toBe(true));
+  expect(result.current.phase).toBe("paused");
+
+  // Resumed turn without required_actions (even if events list still has tool.approval_required)
+  currentTurn = { id: "t2", session_id: "s1", previous_turn_id: "t1", input: {}, state: { status: "running" }, created_at: "" };
+  await waitFor(() => expect(result.current.approvalPending).toBe(false));
+  expect(result.current.phase).toBe("running");
+});
+
+it("resets session, artifacts, and activity when active session disappears", async () => {
+  let sessions: sf.Session[] = [session];
+  vi.spyOn(sf, "listSessions").mockImplementation(async () => sessions);
+  vi.spyOn(sf, "listTurns").mockResolvedValue([runningTurn]);
+  vi.spyOn(sf, "listEvents").mockResolvedValue([
+    { id: "e1", type: "message", session_id: "s1", turn_id: "t1", thread_id: null, created_at: "", data: { text: "hello" } },
+  ]);
+  vi.spyOn(sf, "downloadArtifact").mockImplementation(async (_f, _s, _t, path) =>
+    path === ARTIFACT_PATHS.graph ? { status: "ok", text: "graph LR" } : { status: "pending" }
+  );
+
+  const { result } = renderHook(() => useEvidence(10));
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  expect(result.current.session?.id).toBe("s1");
+  expect(result.current.artifacts.graph).toBe("graph LR");
+  expect(result.current.activity).toHaveLength(1);
+
+  // Session disappears
+  sessions = [];
+  await waitFor(() => expect(result.current.session).toBeNull());
+  expect(result.current.turn).toBeNull();
+  expect(result.current.artifacts).toEqual({});
+  expect(result.current.activity).toEqual([]);
+  expect(result.current.phase).toBe("idle");
+  expect(result.current.approvalPending).toBe(false);
+  expect(result.current.loaded).toBe(true);
 });
