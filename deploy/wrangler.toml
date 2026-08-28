@@ -1,4 +1,5 @@
 name = "schemaforge-worker"
+account_id = "f573408e311d6c38780131fafd5c57eb"
 main = "src/index.ts"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]

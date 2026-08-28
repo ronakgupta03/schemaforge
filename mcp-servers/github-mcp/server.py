@@ -101,5 +101,8 @@ def open_pull_request(repo: str, title: str, head: str, base: str, body: str = "
 
 if __name__ == "__main__":
     mcp.settings.host = "0.0.0.0"
-    mcp.settings.port = 8002
+    # Cloudflare containers: outbound interception is HTTP(S) ports 80/443
+    # only, so the deployed container listens on 80 (PORT env from the
+    # container class envVars). Local dev keeps the default 8002.
+    mcp.settings.port = int(os.environ.get("PORT", "8002"))
     mcp.run(transport="streamable-http")

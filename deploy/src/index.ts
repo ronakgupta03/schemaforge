@@ -2,8 +2,17 @@ import { Container, ContainerProxy, getContainer } from "@cloudflare/containers"
 import { env } from "cloudflare:workers";
 
 // Cloudflare Containers are Workers-only: this Unified Worker serves the SPA
-// (via [assets]) and routes /api/* to the TrueForge container. Verified against
-// wrangler schema + CF Containers docs (see plan EXECUTION NOTE 2).
+// (via [assets]) and routes /api/* and /tf/* to the TrueForge container.
+// Verified against wrangler schema + CF Containers docs (plan EXECUTION NOTE 2).
+//
+// Routing (Qodo PR #22 round 1):
+//   /tf/*            -> TrueForge container (the embedded chat UI; its assets
+//                       are absolute /assets/* and /monacoeditorwork/*)
+//   /assets/*        -> TrueForge container (chat UI assets; the SPA's own
+//                       assets are built under /static/* to avoid collision)
+//   /monacoeditorwork/* -> TrueForge container (Monaco workers)
+//   /api/*           -> TrueForge container (API + SSE)
+//   everything else  -> SPA assets (ui/dist)
 
 export { ContainerProxy };
 
@@ -18,6 +27,7 @@ interface ContainerEnv {
   POSTGRES_PORT: string;
   POSTGRES_DB: string;
   REDIS_URL: string;
+  GITHUB_PERSONAL_ACCESS_TOKEN: string;
   ASSETS: Fetcher;
 }
 
@@ -71,13 +81,24 @@ TrueForgeContainer.outboundByHost = {
 };
 
 export class PostgresMcpContainer extends Container {
-  defaultPort = 8001;
+  defaultPort = 80; // outbound interception is HTTP(S) 80/443 only
   sleepAfter = "10m";
+
+  envVars = {
+    // The prod bookstore DB (not the trueforge metadata DB).
+    DATABASE_URL: `postgresql://${runtimeEnv.POSTGRES_USER}:${runtimeEnv.POSTGRES_PASSWORD}@${runtimeEnv.POSTGRES_HOST}:${runtimeEnv.POSTGRES_PORT}/bookstore?sslmode=require`,
+    PORT: "80",
+  };
 }
 
 export class GithubMcpContainer extends Container {
-  defaultPort = 8002;
+  defaultPort = 80; // outbound interception is HTTP(S) 80/443 only
   sleepAfter = "10m";
+
+  envVars = {
+    GITHUB_PERSONAL_ACCESS_TOKEN: runtimeEnv.GITHUB_PERSONAL_ACCESS_TOKEN,
+    PORT: "80",
+  };
 }
 
 interface Env extends ContainerEnv {
@@ -87,9 +108,21 @@ interface Env extends ContainerEnv {
 export default {
   async fetch(request: Request, e: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/api/")) {
+    const p = url.pathname;
+    const isTf =
+      p === "/tf" || p.startsWith("/tf/") ||
+      p.startsWith("/assets/") || p.startsWith("/monacoeditorwork/") ||
+      p.startsWith("/api/");
+    if (isTf) {
       const container = getContainerStub(e.TRUEFORGE_CONTAINER, "default");
-      return await container.fetch(request);
+      // Strip the /tf prefix for the container's own routing; pass through
+      // everything else (assets, api) untouched.
+      const target = p.startsWith("/tf")
+        ? new URL(p === "/tf" ? "/" : p.slice(3), url)
+        : url;
+      return await container.fetch(
+        new Request(target.toString(), request),
+      );
     }
     return e.ASSETS.fetch(request);
   },
