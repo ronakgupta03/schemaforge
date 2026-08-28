@@ -1,5 +1,20 @@
 # SchemaForge Evidence UI + Cloudflare Deployment — Implementation Plan
 
+> **EXECUTION NOTE 2 (2026-08-28, Task 9 — from verified research):** Cloudflare
+> Containers are **Workers-only** — Pages projects reject `[[containers]]` and
+> `main`. The deploy uses a **Unified Worker with `[assets]`** (serves the SPA
+> dist + routes `/api/*` to the TrueForge container via
+> `getContainer(env.TRUEFORGE_CONTAINER, "default")`), replacing the planned
+> Pages Function router. Redis must be **external managed** (Upstash/Redis
+> Cloud): `outboundByHost` intercepts only HTTP(S), not raw Redis TCP.
+> Container-to-container HTTP uses `outboundByHost` + exported `ContainerProxy`
+> (`postgres-mcp.internal` / `github-mcp.internal`). Env reaches containers via
+> the `envVars` class field (not automatically); ports via `defaultPort` on the
+> Container class (not wrangler.toml). Hosted TrueForge needs discrete
+> `POSTGRES_USER/PASSWORD/HOST/PORT/DB` + `REDIS_URL` + `STANDALONE=false` +
+> `HOST=0.0.0.0` + `PORT` — not a monolithic DATABASE_URL. Keep-warm: override
+> `onActivityExpired()` without `stop()`, or a 5-min cron ping.
+
 > **EXECUTION NOTE (2026-08-28, applied live):** the published
 > `@truefoundry/trueforge-ui` (0.2.4 and 0.3.0-rc.0) crashes in this build
 > environment with a tap `getSnapshot` infinite loop ("Maximum update depth
