@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // SchemaForge local stack: TrueForge + postgres-mcp + github-mcp + registry + UI.
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { createReadStream, existsSync, statSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -52,6 +53,7 @@ const ghConfigPort = process.env.SF_GITHUB_CONFIG_PORT || "9002";
 const pgTransportPort = process.env.SF_POSTGRES_PORT || "8001";
 const ghTransportPort = process.env.SF_GITHUB_PORT || "8002";
 const regPort = process.env.SF_REGISTRY_PORT || "9010";
+const configToken = randomBytes(24).toString("hex");
 
 const kids = [];
 let shuttingDown = false;
@@ -244,6 +246,7 @@ if (pgConfigUp || pgTransportUp) {
   start(venvPy, [join(ROOT, "mcp-servers", "postgres-mcp", "server.py")], {
     SF_CONFIG_PORT: pgConfigPort,
     SF_CONFIG_HOST: "0.0.0.0",
+    SF_MCP_CONFIG_TOKEN: configToken,
     PORT: pgTransportPort,
     DATABASE_URL: process.env.DATABASE_URL || "",
   });
@@ -257,6 +260,7 @@ if (ghConfigUp || ghTransportUp) {
   start(venvPy, [join(ROOT, "mcp-servers", "github-mcp", "server.py")], {
     SF_CONFIG_PORT: ghConfigPort,
     SF_CONFIG_HOST: "0.0.0.0",
+    SF_MCP_CONFIG_TOKEN: configToken,
     PORT: ghTransportPort,
     GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "",
   });
@@ -397,6 +401,9 @@ function getProxyTarget(urlPath) {
       host: "127.0.0.1",
       port: Number(pgConfigPort),
       path: (subpath || "/config") + query,
+      headers: {
+        Authorization: `Bearer ${configToken}`,
+      },
     };
   }
 
@@ -406,6 +413,9 @@ function getProxyTarget(urlPath) {
       host: "127.0.0.1",
       port: Number(ghConfigPort),
       path: (subpath || "/config") + query,
+      headers: {
+        Authorization: `Bearer ${configToken}`,
+      },
     };
   }
 
@@ -449,7 +459,7 @@ const MIME = {
 server = createServer((req, res) => {
   const target = getProxyTarget(req.url || "/");
   if (target) {
-    const headers = { ...req.headers };
+    const headers = { ...req.headers, ...(target.headers || {}) };
     const hostFormatted = target.host.includes(":") && !target.host.startsWith("[")
       ? `[${target.host}]`
       : target.host;

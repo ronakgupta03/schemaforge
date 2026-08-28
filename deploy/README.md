@@ -44,7 +44,6 @@ wrangler secret put POSTGRES_DB           # trueforge
 wrangler secret put REDIS_URL             # redis://...:6379 (Upstash)
 wrangler secret put PUBLIC_BASE_URL       # https://schemaforge-worker.<subdomain>.workers.dev
 wrangler secret put SF_MCP_CONFIG_TOKEN   # openssl rand -hex 24 (MCP config endpoint auth)
-wrangler secret put DAYTONA_API_KEY
 wrangler secret put CLOUDFLARE_AUTH_TOKEN
 wrangler secret put CLOUDFLARE_ACCOUNT_ID
 ```
