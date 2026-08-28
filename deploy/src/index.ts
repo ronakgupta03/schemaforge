@@ -323,29 +323,41 @@ async function containerFetch(
   }
   throw new Error(`Unknown container port: ${port}`);
 }
+let warnedGateDisabled = false;
+
 
 export default {
   async fetch(request: Request, e: Env): Promise<Response> {
     const url = new URL(request.url);
     const p = url.pathname;
 
-    if (e.SF_DEPLOY_TOKEN) {
-      const isProtected =
-        p.startsWith("/api/v1/settings/") ||
-        p === "/api/sf" ||
-        p.startsWith("/api/sf/");
-      if (isProtected) {
+    const accessConfigured = Boolean(e.CF_ACCESS_TEAM && e.CF_ACCESS_AUD);
+    if (!accessConfigured && !e.SF_DEPLOY_TOKEN && !warnedGateDisabled) {
+      warnedGateDisabled = true;
+      console.warn("deploy gate DISABLED (set CF_ACCESS_TEAM + CF_ACCESS_AUD or SF_DEPLOY_TOKEN)");
+    }
+
+    const isProtected =
+      p.startsWith("/api/v1/settings/") ||
+      p === "/api/sf" ||
+      p.startsWith("/api/sf/");
+    if (isProtected) {
+      if (accessConfigured) {
         const viaAccess = request.headers.get("CF-Access-Jwt-Assertion");
-        if (viaAccess && (await verifyAccessJwt(viaAccess, e))) {
-          // Access JWT verified — allow
-        } else {
-          const auth = request.headers.get("Authorization");
-          if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
-            return new Response(JSON.stringify({ error: "Unauthorized" }), {
-              status: 401,
-              headers: { "Content-Type": "application/json" },
-            });
-          }
+        const ok = viaAccess ? await verifyAccessJwt(viaAccess, e) : false;
+        if (!ok) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      } else if (e.SF_DEPLOY_TOKEN) {
+        const auth = request.headers.get("Authorization");
+        if (auth !== `Bearer ${e.SF_DEPLOY_TOKEN}`) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
         }
       }
     }
