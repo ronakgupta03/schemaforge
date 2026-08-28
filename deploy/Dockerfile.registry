@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+WORKDIR /srv
+COPY core/ ./core/
+RUN pip install --no-cache-dir -e ./core
+ENV SF_REGISTRY_HOST=0.0.0.0 SF_REGISTRY_PORT=9010 TRUEFORGE_URL=http://trueforge.internal
+EXPOSE 9010
+CMD ["sf-registry"]
