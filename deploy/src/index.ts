@@ -23,6 +23,7 @@ interface ContainerEnv {
   POSTGRES_MCP_CONTAINER: DurableObjectNamespace<Container>;
   GITHUB_MCP_CONTAINER: DurableObjectNamespace<Container>;
   REGISTRY_CONTAINER: DurableObjectNamespace<Container>;
+  SF_CONFIG_KV?: KVNamespace;
   PUBLIC_BASE_URL: string;
   POSTGRES_USER: string;
   POSTGRES_PASSWORD: string;
@@ -35,6 +36,7 @@ interface ContainerEnv {
   DAYTONA_API_KEY?: string;
   ASSETS: Fetcher;
 }
+
 
 // The `cloudflare:workers` env global is untyped; read through a typed lens.
 const runtimeEnv = env as unknown as ContainerEnv;
@@ -136,6 +138,43 @@ interface Env extends ContainerEnv {
   ASSETS: Fetcher;
 }
 
+const REPLAY_PATHS: Record<string, number> = {
+  "/api/sf/config/postgres-mcp": 9001,
+  "/api/sf/config/github-mcp": 9002,
+  "/api/sf/apply-agent": 9010,
+};
+
+let replayed = false;
+
+async function containerFetch(
+  e: Env,
+  urlStr: string,
+  init: RequestInit,
+  port: number,
+): Promise<Response> {
+  const u = new URL(urlStr);
+  const path = u.pathname;
+  if (port === 9001) {
+    const container = getContainerStub(e.POSTGRES_MCP_CONTAINER, "default");
+    const subpath = path.slice("/api/sf/config/postgres-mcp".length) || "/config";
+    const req = new Request(new URL(subpath + u.search, "http://postgres-mcp.internal").toString(), init);
+    return await container.fetch(switchPort(req, 9001));
+  }
+  if (port === 9002) {
+    const container = getContainerStub(e.GITHUB_MCP_CONTAINER, "default");
+    const subpath = path.slice("/api/sf/config/github-mcp".length) || "/config";
+    const req = new Request(new URL(subpath + u.search, "http://github-mcp.internal").toString(), init);
+    return await container.fetch(switchPort(req, 9002));
+  }
+  if (port === 9010) {
+    const container = getContainerStub(e.REGISTRY_CONTAINER, "default");
+    const subpath = path.startsWith("/api/sf") ? (path.slice("/api/sf".length) || "/") : path;
+    const req = new Request(new URL(subpath + u.search, "http://registry.internal").toString(), init);
+    return await container.fetch(switchPort(req, 9010));
+  }
+  throw new Error(`Unknown container port: ${port}`);
+}
+
 export default {
   async fetch(request: Request, e: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -157,6 +196,40 @@ export default {
       }
     }
 
+    if (!replayed && (p === "/api/sf" || p.startsWith("/api/sf/"))) {
+      replayed = true;
+      if (e.SF_CONFIG_KV) {
+        try {
+          const list = await e.SF_CONFIG_KV.list();
+          for (const key of list.keys) {
+            try {
+              const body = await e.SF_CONFIG_KV.get(key.name);
+              const port = REPLAY_PATHS[key.name];
+              if (!body || !port) continue;
+              const headers: Record<string, string> = { "Content-Type": "application/json" };
+              if (key.name.startsWith("/api/sf/config/") && e.SF_MCP_CONFIG_TOKEN) {
+                headers["Authorization"] = `Bearer ${e.SF_MCP_CONFIG_TOKEN}`;
+              }
+              await containerFetch(e, `http://x.internal${key.name}`, { method: "POST", headers, body }, port);
+            } catch (itemErr) {
+              console.error(`kv replay failed for ${key.name}`, itemErr);
+            }
+          }
+        } catch (err) {
+          console.error("kv replay failed", err);
+        }
+      }
+    }
+
+    let replayBody: string | null = null;
+    if (request.method === "POST" && p in REPLAY_PATHS) {
+      try {
+        replayBody = await request.clone().text();
+      } catch (err) {
+        console.error("Failed to read POST body for replay cache:", err);
+      }
+    }
+
     if (p === "/api/sf/config/postgres-mcp" || p.startsWith("/api/sf/config/postgres-mcp/")) {
       const container = getContainerStub(e.POSTGRES_MCP_CONTAINER, "default");
       const subpath = p.slice("/api/sf/config/postgres-mcp".length) || "/config";
@@ -165,9 +238,17 @@ export default {
       if (e.SF_MCP_CONFIG_TOKEN) {
         req.headers.set("Authorization", `Bearer ${e.SF_MCP_CONFIG_TOKEN}`);
       }
-      return await container.fetch(
+      const res = await container.fetch(
         switchPort(req, 9001),
       );
+      if (replayBody !== null && res.status < 400 && e.SF_CONFIG_KV) {
+        try {
+          await e.SF_CONFIG_KV.put(p, replayBody);
+        } catch (err) {
+          console.error("Failed to persist to SF_CONFIG_KV:", err);
+        }
+      }
+      return res;
     }
 
     if (p === "/api/sf/config/github-mcp" || p.startsWith("/api/sf/config/github-mcp/")) {
@@ -178,18 +259,34 @@ export default {
       if (e.SF_MCP_CONFIG_TOKEN) {
         req.headers.set("Authorization", `Bearer ${e.SF_MCP_CONFIG_TOKEN}`);
       }
-      return await container.fetch(
+      const res = await container.fetch(
         switchPort(req, 9002),
       );
+      if (replayBody !== null && res.status < 400 && e.SF_CONFIG_KV) {
+        try {
+          await e.SF_CONFIG_KV.put(p, replayBody);
+        } catch (err) {
+          console.error("Failed to persist to SF_CONFIG_KV:", err);
+        }
+      }
+      return res;
     }
 
     if (p === "/api/sf" || p.startsWith("/api/sf/")) {
       const container = getContainerStub(e.REGISTRY_CONTAINER, "default");
       const subpath = p.slice("/api/sf".length) || "/";
       const targetUrl = new URL(subpath + url.search, url);
-      return await container.fetch(
+      const res = await container.fetch(
         new Request(targetUrl.toString(), request),
       );
+      if (replayBody !== null && res.status < 400 && e.SF_CONFIG_KV) {
+        try {
+          await e.SF_CONFIG_KV.put(p, replayBody);
+        } catch (err) {
+          console.error("Failed to persist to SF_CONFIG_KV:", err);
+        }
+      }
+      return res;
     }
 
     const isTf =
