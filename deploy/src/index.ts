@@ -340,10 +340,17 @@ export default {
       console.warn("deploy gate DISABLED (set CF_ACCESS_TEAM + CF_ACCESS_AUD or SF_DEPLOY_TOKEN)");
     }
 
+    let dp = p;
+    try {
+      dp = decodeURIComponent(p);
+    } catch {
+      // malformed percent-encoding: keep raw path; the gate below can't be
+      // bypassed via encoding tricks.
+    }
     const isProtected =
-      p.startsWith("/api/v1/settings/") ||
-      p === "/api/sf" ||
-      p.startsWith("/api/sf/");
+      dp.startsWith("/api/v1/settings/") ||
+      dp === "/api/sf" ||
+      dp.startsWith("/api/sf/");
     if (isProtected) {
       if (accessConfigured) {
         const viaAccess = request.headers.get("CF-Access-Jwt-Assertion");
