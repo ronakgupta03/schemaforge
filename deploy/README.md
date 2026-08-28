@@ -18,7 +18,7 @@ registry dynamically derives and upserts the agent manifest.
 
 Cloudflare container disk is ephemeral across container sleeps. To ensure operator
 configurations survive container wake without manual re-entry:
-- Successful `POST` requests to `/api/sf/config/postgres-mcp`, `/api/sf/config/github-mcp`, and `/api/sf/apply-agent` are automatically persisted by the Worker into the `SF_CONFIG_KV` KV namespace.
+- Successful `POST` requests to `/api/sf/config/postgres-mcp`, `/api/sf/config/github-mcp`, `/api/sf/config`, and `/api/sf/apply-agent` are automatically persisted by the Worker into the `SF_CONFIG_KV` KV namespace.
 - On Worker cold start / container wake, the first `/api/sf/*` request triggers an automatic replay of all saved configurations from `SF_CONFIG_KV` to the respective container endpoints (Postgres MCP on port 9001, GitHub MCP on port 9002 with `SF_MCP_CONFIG_TOKEN`, and Registry on port 9010).
 - `scripts/apply-cf-secrets.sh` idempotently creates the `SF_CONFIG_KV` namespace and injects its namespace ID into `deploy/wrangler.toml`.
 ## Routing (Worker)
@@ -105,3 +105,10 @@ and credentials directly in the **Settings** tab.
   ping doubles it.
 - The UI's chat iframe defaults to the same-origin `/tf/` route in production
   (override with `VITE_CHAT_URL` at build time if needed).
+
+## Access Model & Security
+
+- **Cloudflare Access (Real Gate):** In a deployed environment, Cloudflare Access sits in front of the Worker as the real access control gate (evaluating identity and injecting the `CF-Access-Jwt-Assertion` header).
+- **SF_DEPLOY_TOKEN (Optional API-Client Layer):** The Worker supports `SF_DEPLOY_TOKEN` as an optional bearer-token layer for external API clients and scripts. When `CF-Access-Jwt-Assertion` is present from Cloudflare Access, the Worker skips the `SF_DEPLOY_TOKEN` Bearer check.
+- **SPA Tokenless Design:** The Evidence UI SPA carries no deploy token in its client bundle. Browser users are authenticated directly by Cloudflare Access at the edge.
+- **SF_MCP_CONFIG_TOKEN:** Guards container configuration endpoints (Postgres MCP on port 9001, GitHub MCP on port 9002).
