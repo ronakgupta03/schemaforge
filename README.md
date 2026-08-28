@@ -95,7 +95,27 @@ explains — it never guesses about code or schema.
 - **Reversible GitHub actions.** PR/branch creation carries no approval
   requirement — merging is still a human action.
 
-## Run it
+## Run it — one command (npx package)
+
+```bash
+npx @schemaforge/schemaforge
+```
+
+Boots the full local stack (TrueForge + postgres-mcp + github-mcp + registry
+ Evidence UI) and opens the browser at http://localhost:5173. Running
+services on the default ports are reused instead of restarted. First run
+creates a Python venv and installs the engine + MCP dependencies.
+
+**Configure everything in the UI — nothing is hardcoded.** The Settings tab
+has five sections:
+
+1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
+2. **MCP Servers**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
+3. **Connectors**: Set up the production PostgreSQL connection (database DSN / URL) and the GitHub connector with your token and repository.
+4. **Sandbox**: Enable or disable the Daytona sandbox environment used for isolated migration execution and verification.
+5. **Apply Agent**: Re-generate the agent manifest and apply it to TrueForge. Unconfigured services are simply omitted: without a Postgres connector, the agent skips prod introspection and apply; without a GitHub connector, it saves `out/diff.patch` locally instead of opening a PR. Nothing crashes.
+
+## Run it — full local stack (all components, dev setup)
 
 ```bash
 # 0. One-time environment (creates the .vevn venv the scripts use)

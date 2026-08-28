@@ -33,8 +33,10 @@ def _load_config() -> dict:
 
 
 def _save_config() -> None:
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(os.path.join(STATE_DIR, "postgres-mcp.json"), "w") as f:
+    os.makedirs(STATE_DIR, exist_ok=True, mode=0o700)
+    path = os.path.join(STATE_DIR, "postgres-mcp.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(_config, f)
 
 

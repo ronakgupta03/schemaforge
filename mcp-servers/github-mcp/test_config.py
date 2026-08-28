@@ -1,4 +1,5 @@
 """Tests for the lazy-config behavior (no network calls)."""
+import importlib.util
 import os
 import sys
 import tempfile
@@ -14,14 +15,19 @@ os.environ.pop("GITHUB_PERSONAL_ACCESS_TOKEN", None)
 os.environ["SF_MCP_CONFIG_TOKEN"] = "test-token"
 os.environ["SF_CONFIG_PORT"] = "19002"
 os.environ["SF_STATE_DIR"] = _temp_state.name
-sys.path.insert(0, str(Path(__file__).parent))
 
-import server as mcp_server  # noqa: E402
-
+_spec = importlib.util.spec_from_file_location(
+    "github_server", str(Path(__file__).parent / "server.py")
+)
+mcp_server = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mcp_server)
+def __dir__():
+    sys.modules.pop("test_config", None)
+    return list(globals().keys())
 
 @pytest.fixture(scope="module")
 def config_server():
-    port = int(os.environ["SF_CONFIG_PORT"])
+    port = mcp_server.CONFIG_PORT
     t = threading.Thread(target=mcp_server.run_config_server, daemon=True)
     t.start()
     for _ in range(50):
