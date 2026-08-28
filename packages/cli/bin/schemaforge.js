@@ -53,7 +53,7 @@ const ghConfigPort = process.env.SF_GITHUB_CONFIG_PORT || "9002";
 const pgTransportPort = process.env.SF_POSTGRES_PORT || "8001";
 const ghTransportPort = process.env.SF_GITHUB_PORT || "8002";
 const regPort = process.env.SF_REGISTRY_PORT || "9010";
-const configToken = randomBytes(24).toString("hex");
+const configToken = process.env.SF_MCP_CONFIG_TOKEN || randomBytes(24).toString("hex");
 const tokenFile = join(stateDir, "sf-mcp-token");
 try {
   mkdirSync(stateDir, { recursive: true });
@@ -66,7 +66,7 @@ const kids = [];
 let shuttingDown = false;
 let server = null;
 
-function httpProbe(host, port, path = "/", timeoutMs = 800) {
+function httpProbe(host, port, path = "/", timeoutMs = 800, headers = {}) {
   return new Promise((resolve) => {
     const isIpv6 = host.includes(":") && !host.startsWith("[");
     const formattedHost = isIpv6 ? `[${host}]` : host;
@@ -78,20 +78,21 @@ function httpProbe(host, port, path = "/", timeoutMs = 800) {
         method: "GET",
         headers: {
           Host: `${formattedHost}:${port}`,
+          ...headers,
         },
       },
       (res) => {
         const code = res.statusCode || 0;
         res.resume();
-        resolve(code >= 200 && code < 500);
+        resolve(code);
       }
     );
     req.setTimeout(timeoutMs, () => {
       req.destroy();
-      resolve(false);
+      resolve(0);
     });
     req.on("error", () => {
-      resolve(false);
+      resolve(0);
     });
     req.end();
   });
@@ -247,11 +248,51 @@ if (!existsSync(venvReady)) {
 }
 
 // 2. services
-const pgConfigUp = await httpProbe("127.0.0.1", Number(pgConfigPort), "/config");
-const pgTransportUp = await httpProbe("127.0.0.1", Number(pgTransportPort), "/");
-if (pgConfigUp || pgTransportUp) {
-  console.log(`[schemaforge] reusing running postgres-mcp on :${pgTransportPort} — ensure its SF_MCP_CONFIG_TOKEN matches ${tokenFile}`);
-} else {
+let repoRootToken = null;
+const repoTokenPath = existsSync(join(REPO_ROOT, ".sf-mcp-token"))
+  ? join(REPO_ROOT, ".sf-mcp-token")
+  : existsSync(join(ROOT, ".sf-mcp-token"))
+  ? join(ROOT, ".sf-mcp-token")
+  : null;
+if (repoTokenPath) {
+  try {
+    repoRootToken = readFileSync(repoTokenPath, "utf8").trim();
+  } catch {
+    // ignore
+  }
+}
+const tokenCandidates = [...new Set([configToken, repoRootToken].filter(Boolean))];
+
+let pgReused = false;
+let pgBusy = false;
+for (const c of tokenCandidates) {
+  const status = await httpProbe("127.0.0.1", Number(pgConfigPort), "/config", 800, {
+    Authorization: `Bearer ${c}`,
+  });
+  if (status === 200) {
+    pgReused = true;
+    if (c !== configToken) {
+      try {
+        writeFileSync(tokenFile, c, { mode: 0o600 });
+      } catch (err) {
+        console.warn(`[schemaforge] failed to write config token file at ${tokenFile}: ${err.message}`);
+      }
+    }
+    console.log(`[schemaforge] reusing running postgres-mcp on :${pgTransportPort} (token verified)`);
+    break;
+  } else if (status > 0) {
+    pgBusy = true;
+  }
+}
+
+if (!pgReused) {
+  const pgTransportStatus = await httpProbe("127.0.0.1", Number(pgTransportPort), "/", 800);
+  if (pgBusy || pgTransportStatus > 0) {
+    console.error(
+      `[schemaforge] postgres-mcp port :${pgTransportPort} is busy with a server whose SF_MCP_CONFIG_TOKEN we cannot verify — stop it, or export SF_MCP_CONFIG_TOKEN matching that server`
+    );
+    process.exit(1);
+  }
   start(venvPy, [join(ROOT, "mcp-servers", "postgres-mcp", "server.py")], {
     SF_CONFIG_PORT: pgConfigPort,
     SF_CONFIG_HOST: "0.0.0.0",
@@ -261,11 +302,36 @@ if (pgConfigUp || pgTransportUp) {
   });
 }
 
-const ghConfigUp = await httpProbe("127.0.0.1", Number(ghConfigPort), "/config");
-const ghTransportUp = await httpProbe("127.0.0.1", Number(ghTransportPort), "/");
-if (ghConfigUp || ghTransportUp) {
-  console.log(`[schemaforge] reusing running github-mcp on :${ghTransportPort} — ensure its SF_MCP_CONFIG_TOKEN matches ${tokenFile}`);
-} else {
+let ghReused = false;
+let ghBusy = false;
+for (const c of tokenCandidates) {
+  const status = await httpProbe("127.0.0.1", Number(ghConfigPort), "/config", 800, {
+    Authorization: `Bearer ${c}`,
+  });
+  if (status === 200) {
+    ghReused = true;
+    if (c !== configToken) {
+      try {
+        writeFileSync(tokenFile, c, { mode: 0o600 });
+      } catch (err) {
+        console.warn(`[schemaforge] failed to write config token file at ${tokenFile}: ${err.message}`);
+      }
+    }
+    console.log(`[schemaforge] reusing running github-mcp on :${ghTransportPort} (token verified)`);
+    break;
+  } else if (status > 0) {
+    ghBusy = true;
+  }
+}
+
+if (!ghReused) {
+  const ghTransportStatus = await httpProbe("127.0.0.1", Number(ghTransportPort), "/", 800);
+  if (ghBusy || ghTransportStatus > 0) {
+    console.error(
+      `[schemaforge] github-mcp port :${ghTransportPort} is busy with a server whose SF_MCP_CONFIG_TOKEN we cannot verify — stop it, or export SF_MCP_CONFIG_TOKEN matching that server`
+    );
+    process.exit(1);
+  }
   start(venvPy, [join(ROOT, "mcp-servers", "github-mcp", "server.py")], {
     SF_CONFIG_PORT: ghConfigPort,
     SF_CONFIG_HOST: "0.0.0.0",
