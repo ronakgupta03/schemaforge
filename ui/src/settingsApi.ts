@@ -2,11 +2,6 @@ import type { FetchFn } from "./sfApi";
 
 let configToken: string | null = null;
 
-// The in-bundle VITE_SF_DEPLOY_TOKEN is a convenience gate for the deployed
-// Worker, NOT real authentication — real access control is Cloudflare Access
-// (see deploy/README.md).
-const deployToken = import.meta.env?.VITE_SF_DEPLOY_TOKEN;
-
 export async function ensureToken(f?: FetchFn): Promise<string | null> {
   if (configToken) return configToken;
   try {
@@ -25,11 +20,6 @@ export async function ensureToken(f?: FetchFn): Promise<string | null> {
   return configToken;
 }
 
-const authHeaders = (headers?: Record<string, string>): Record<string, string> | undefined => {
-  if (!deployToken) return headers;
-  return { ...(headers || {}), Authorization: `Bearer ${deployToken}` };
-};
-
 const json = async <T>(resOrPromise: Response | Promise<Response>): Promise<T> => {
   const res = await resOrPromise;
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -37,7 +27,7 @@ const json = async <T>(resOrPromise: Response | Promise<Response>): Promise<T> =
 };
 
 export const listModelProviders = (f: FetchFn) =>
-  json<{ data: unknown[] }>(f("/api/v1/settings/model-providers", deployToken ? { headers: { Authorization: `Bearer ${deployToken}` } } : undefined)).then((b) => b.data ?? []);
+  json<{ data: unknown[] }>(f("/api/v1/settings/model-providers")).then((b) => b.data ?? []);
 
 export const listModels = (f: FetchFn) =>
   json<{ data: { name: string }[] }>(f("/api/v1/models")).then((b) => b.data ?? []);
@@ -45,30 +35,28 @@ export const listModels = (f: FetchFn) =>
 export const upsertModelProvider = (f: FetchFn, manifest: unknown) =>
   f("/api/v1/settings/model-providers", {
     method: "PUT",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ manifest }),
   });
 
 export const deleteModelProvider = (f: FetchFn, name: string) =>
   f(`/api/v1/settings/model-providers/${encodeURIComponent(name)}`, {
     method: "DELETE",
-    headers: authHeaders(),
   });
 
 export const listMcpServers = (f: FetchFn) =>
-  json<{ data: unknown[] }>(f("/api/v1/settings/mcp-servers", deployToken ? { headers: { Authorization: `Bearer ${deployToken}` } } : undefined)).then((b) => b.data ?? []);
+  json<{ data: unknown[] }>(f("/api/v1/settings/mcp-servers")).then((b) => b.data ?? []);
 
 export const upsertMcpServer = (f: FetchFn, manifest: unknown) =>
   f("/api/v1/settings/mcp-servers", {
     method: "PUT",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ manifest }),
   });
 
 export const deleteMcpServer = (f: FetchFn, name: string) =>
   f(`/api/v1/settings/mcp-servers/${encodeURIComponent(name)}`, {
     method: "DELETE",
-    headers: authHeaders(),
   });
 
 export const getCapabilities = (f: FetchFn) =>
@@ -77,38 +65,37 @@ export const getCapabilities = (f: FetchFn) =>
 export const upsertSandboxProvider = (f: FetchFn, manifest: unknown) =>
   f("/api/v1/settings/sandbox-providers", {
     method: "PUT",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ manifest }),
   });
 
 export const registryHealth = (f: FetchFn) =>
-  json<{ data: { ok: boolean } }>(f("/api/sf/health", deployToken ? { headers: { Authorization: `Bearer ${deployToken}` } } : undefined)).then((b) => b.data);
+  json<{ data: { ok: boolean } }>(f("/api/sf/health")).then((b) => b.data);
 
 export const registrySnapshot = (f: FetchFn) =>
   json<{ data: { mcp_servers: unknown[]; models: string[]; sandbox_enabled: boolean } }>(
-    f("/api/sf/snapshot", deployToken ? { headers: { Authorization: `Bearer ${deployToken}` } } : undefined),
+    f("/api/sf/snapshot"),
   ).then((b) => b.data);
 
 export const registryApplyAgent = (f: FetchFn, overrides: Record<string, string[]> = {}) =>
   f("/api/sf/apply-agent", {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ overrides }),
   });
 
 export const registrySetModel = (f: FetchFn, model: string) =>
   f("/api/sf/config", {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model }),
   });
 
 export const configPostgres = async (f: FetchFn, databaseUrl: string) => {
   const token = await ensureToken(f);
-  const auth = deployToken || token;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (auth) {
-    headers["Authorization"] = `Bearer ${auth}`;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
   return f("/api/sf/config/postgres-mcp", {
     method: "POST",
@@ -121,10 +108,9 @@ export const savePostgresConfig = configPostgres;
 
 export const configGithub = async (f: FetchFn, token: string, defaultRepo: string) => {
   const cToken = await ensureToken(f);
-  const auth = deployToken || cToken;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (auth) {
-    headers["Authorization"] = `Bearer ${auth}`;
+  if (cToken) {
+    headers["Authorization"] = `Bearer ${cToken}`;
   }
   return f("/api/sf/config/github-mcp", {
     method: "POST",
