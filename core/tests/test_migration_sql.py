@@ -110,3 +110,55 @@ def test_block_comment_does_not_merge_tokens(tmp_path):
     p = _write(tmp_path, "CREATE/* note */TABLE t (id int);\n")
     cls = classify_sql(p)
     assert cls.expand and not cls.has_unclassified
+
+
+def test_double_quote_identifier_not_split(tmp_path):
+    # A ';' inside a double-quoted identifier must not terminate a statement;
+    # the splitter yields two statements, not three.
+    body = 'INSERT INTO "a;b" VALUES(1);\nCREATE TABLE t (id int);\n'
+    cls = classify_sql(_write(tmp_path, body))
+    assert len(cls.expand) == 2
+
+
+def test_analyze_locks_add_column_volatile_default_is_heavy(tmp_path):
+    # gen_random_uuid() is volatile, so ADD COLUMN ... DEFAULT forces a full
+    # table+index rewrite on PG11+ -- flagged dangerous, not brief-lock.
+    p = _write(tmp_path, "ALTER TABLE users ADD COLUMN uid text DEFAULT gen_random_uuid();\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.lock == "AccessExclusive"
+    assert r.rewrites is True
+    assert r.risk == "dangerous"
+
+
+def test_analyze_locks_add_column_stable_default_is_brief(tmp_path):
+    # A constant/STABLE default is a PG11+ metadata-only fast default -- brief
+    # lock, no rewrite.
+    p = _write(tmp_path, "ALTER TABLE users ADD COLUMN c text DEFAULT 'x';\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "brief-lock"
+    assert r.rewrites is False
+
+
+def test_analyze_locks_create_index_concurrently_is_online(tmp_path):
+    # CONCURRENTLY does not block writes; it is 'online' (not brief-lock like a
+    # plain CREATE INDEX) and applied outside the transaction by the verify path.
+    p = _write(tmp_path, "CREATE INDEX CONCURRENTLY idx ON users (email);\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "online"
+    assert "CONCURRENTLY" in r.alternative
+
+
+def test_analyze_locks_update_backfill_is_dangerous(tmp_path):
+    # A large UPDATE backfill holds row locks for the whole transaction.
+    p = _write(tmp_path, "UPDATE users SET address = 'x' WHERE address IS NULL;\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "dangerous"
+    assert r.alternative
+
+
+def test_analyze_locks_alembic_version_update_is_safe(tmp_path):
+    # The single-row alembic_version stamp is not a backfill.
+    p = _write(tmp_path, "UPDATE alembic_version SET version_num = '0002';\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "safe"
+    assert not r.alternative

@@ -259,8 +259,9 @@ def _enclosing(
     return "<module>"
 
 
-def _last_arg(args_text: str) -> str:
-    """Last top-level comma-separated argument of a call's argument list."""
+def _last_arg_start(args_text: str) -> int:
+    """Index within ``args_text`` where the final top-level argument begins
+    (right after the last depth-0 comma), or 0 for a single argument."""
     depth = 0
     last_comma = -1
     in_s = in_d = False
@@ -279,7 +280,12 @@ def _last_arg(args_text: str) -> str:
             depth -= 1
         elif ch == "," and depth == 0:
             last_comma = i
-    return args_text[last_comma + 1:].strip()
+    return last_comma + 1
+
+
+def _last_arg(args_text: str) -> str:
+    """Last top-level comma-separated argument of a call's argument list."""
+    return args_text[_last_arg_start(args_text):].strip()
 
 
 def _collect_rest(
@@ -298,8 +304,10 @@ def _collect_rest(
         paren_open = src.find("(", m.start())
         paren_close = _balance(src, paren_open, "(", ")") if paren_open != -1 else -1
         handler = ""
+        inner = ""
         if paren_close > 0:
-            handler = _last_arg(src[m.end():paren_close])
+            inner = src[m.end():paren_close]
+            handler = _last_arg(inner)
         if re.fullmatch(r"\w+", handler) and handler in fn_spans:
             # named handler — reuse its body and link via a call edge
             o, c = fn_spans[handler]
@@ -307,11 +315,15 @@ def _collect_rest(
             facts.calls.append(FunctionCall(
                 caller=rid, callee=handler, file=rel, line=line,
             ))
+        elif paren_close > 0:
+            # inline callback (arrow expression or block) — span the final
+            # argument, bounded by the route call's parentheses. Covers concise
+            # arrows (``c => expr``) with no block body, which a brace search
+            # would mis-attribute to <module>.
+            a0 = m.end() + _last_arg_start(inner)
+            route_spans.append((rid, a0, paren_close))
         else:
-            # inline callback (arrow / block) — find its first '{' and balance
-            brace_open = src.find("{", m.end())
-            close = _balance(src, brace_open) if brace_open != -1 else -1
-            route_spans.append((rid, brace_open, close))
+            route_spans.append((rid, -1, -1))
         facts.endpoints.append(EndpointFact(
             path=path, method=method, file=rel, line=line, function=rid,
         ))
@@ -321,17 +333,19 @@ def _collect_rest(
         if m.group(1):  # 3-part NS.TABLE.COL
             ns, tbl, col = m.group(1), m.group(2), m.group(3)
             if ns in namespaces:
+                # AttrAccess.model is the Drizzle JS constant name (the key the
+                # impact-graph model node uses), NOT the resolved SQL table name.
                 facts.attr_accesses.append(AttrAccess(
-                    model=name_map.get(tbl, tbl), column=col, file=rel,
+                    model=tbl, column=col, file=rel,
                     line=_line_of(src, m.start()),
                     function=_enclosing(fn_spans, route_spans, m.start()),
                 ))
         else:  # 2-part TABLE.COL
             t, col = m.group(4), m.group(5)
             if t in ident_map:
-                model = name_map.get(ident_map[t], ident_map[t])
+                model = ident_map[t]
             elif t in name_map:
-                model = name_map[t]
+                model = t
             else:
                 continue
             facts.attr_accesses.append(AttrAccess(

@@ -133,3 +133,21 @@ def test_analyze_locks_create_table_is_safe(tmp_path):
     reports = analyze_locks(f)
     create = [r for r in reports if "create_table" in r.statement]
     assert create and create[0].risk == "safe"
+
+
+def test_analyze_locks_flags_update_backfill_as_dangerous(tmp_path):
+    # A large UPDATE backfill (op.execute("UPDATE ...")) holds row locks for the
+    # whole transaction -- flagged dangerous, mirroring the raw-SQL path.
+    src = '''\
+from alembic import op
+revision="x"; down_revision="y"
+
+def upgrade():
+    op.execute("UPDATE users SET address = '' WHERE address IS NULL")
+'''
+    f = _write(tmp_path, "backfill.py", src)
+    reports = analyze_locks(f)
+    upd = [r for r in reports if r.reason.startswith("UPDATE")]
+    assert upd and upd[0].risk == "dangerous"
+    assert upd[0].lock == "RowExclusive"
+    assert upd[0].alternative

@@ -26,4 +26,6 @@ app.get('/api/users/:id', async (c) => {
   return c.json(u);
 });
 
+app.get('/api/audit', c => app.db.select({ p: schema.auditLog.payload }).from(schema.auditLog));
+
 export default app;

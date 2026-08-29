@@ -177,6 +177,12 @@ def _lock_for(op: OpClass) -> tuple[str, bool, str, str]:
     if op.reason.startswith("INSERT..SELECT"):
         return ("Share", False, "dangerous",
                 "backfill in batches (LIMIT/OFFSET or keyset) to avoid a long Share lock on the source table")
+    if op.reason.startswith("UPDATE"):
+        # A large UPDATE backfill holds row locks for the whole transaction;
+        # without a proof it is bounded/batched it is dangerous, consistent with
+        # _sql_kind labelling UPDATE a data backfill whose lock analysis is heavy.
+        return ("RowExclusive", False, "dangerous",
+                "batch the UPDATE (keyset/LIMIT-OFFSET) to keep transactions short and avoid long row locks")
     if op.reason == "CREATE (additive)":
         return ("none", False, "safe", "")
     if op.reason.startswith("DROP/TRUNCATE"):

@@ -11,11 +11,20 @@ from pathlib import Path
 
 from .migration import LockReport, OpClass, PhaseClassification, _sql_kind
 
+# Common STABLE (non-volatile) defaults that PostgreSQL 11+ can apply as a
+# metadata-only fast default (no table rewrite). Anything else is conservatively
+# treated as volatile (forces a rewrite) — see ``_default_is_volatile``.
+_NONVOLATILE_DEFAULT_FNS = frozenset({
+    "now", "current_timestamp", "transaction_timestamp",
+    "localtimestamp", "current_date", "current_time",
+})
+
 
 def _split_sql_statements(sql: str):
     """Yield ``(lineno, statement)`` tuples for a SQL string.
 
-    Aware of single-quoted strings ('' escapes a quote), PostgreSQL dollar
+    Aware of single-quoted strings ('' escapes a quote), double-quoted
+    PostgreSQL identifiers ("" escapes an embedded quote), PostgreSQL dollar
     quotes (``$tag$...$tag$`` and ``$$...$$``), ``--`` line comments, and
     ``/* */`` block comments. A space is emitted where a comment is stripped so
     adjacent tokens do not merge (``CREATE/* x */TABLE`` -> ``CREATE TABLE``).
@@ -38,6 +47,26 @@ def _split_sql_statements(sql: str):
                         j += 2
                         continue
                     buf.append("'")
+                    j += 1
+                    break
+                buf.append(sql[j])
+                j += 1
+            i = j
+            continue
+        if ch == '"':
+            # double-quoted PostgreSQL identifier — "" escapes an embedded
+            # quote; a ';' inside it must not terminate a statement.
+            if buf_start is None:
+                buf_start = i
+            buf.append(ch)
+            j = i + 1
+            while j < n:
+                if sql[j] == '"':
+                    if j + 1 < n and sql[j + 1] == '"':
+                        buf.append('""')
+                        j += 2
+                        continue
+                    buf.append('"')
                     j += 1
                     break
                 buf.append(sql[j])
@@ -130,6 +159,36 @@ def validate_phase_sql(file_path: str | Path, phase: str) -> None:
         raise ValueError(f"contract migration contains expand ops: {ops}")
 
 
+def _default_is_volatile(s: str) -> bool:
+    """True if an ``ADD COLUMN ... DEFAULT <expr>`` forces a PostgreSQL 11+ table
+    rewrite (cannot use the metadata-only fast default).
+
+    A literal constant or a known STABLE function (now, current_timestamp, ...)
+    is metadata-only. Any other expression — volatile functions such as
+    ``clock_timestamp()``/``random()``, or an unrecognised expression — is
+    conservatively treated as volatile, matching PostgreSQL's rule that a
+    volatile default cannot reuse the fast-default shortcut and rewrites the
+    whole table and its indexes.
+    """
+    m = re.search(r"\bdefault\b\s+(.+)", s, re.I | re.DOTALL)
+    if not m:
+        return False
+    expr = re.split(
+        r"\b(not\s+null|references|primary\s+key|check\b|unique\b|collate\b|generated\b)\b",
+        m.group(1), maxsplit=1, flags=re.I)[0].strip().rstrip(",").strip()
+    if not expr:
+        return False
+    # literal constants -> metadata-only
+    if re.match(r"^(?:'[^']*'|\"[^\"]*\"|-?\d+(?:\.\d+)?|true|false|null)\s*$", expr, re.I):
+        return False
+    # known STABLE function call -> metadata-only
+    fm = re.match(r"^([A-Za-z_]\w*)\s*\(", expr)
+    if fm and fm.group(1).lower() in _NONVOLATILE_DEFAULT_FNS:
+        return False
+    # any other expression -> conservatively volatile (rewrite)
+    return True
+
+
 def _lock_for_sql(stmt: str, lineno: int) -> LockReport:
     """Lock / rewrites / risk / alternative for a single SQL statement.
 
@@ -137,6 +196,8 @@ def _lock_for_sql(stmt: str, lineno: int) -> LockReport:
     metadata-only (a brief ``AccessExclusive`` lock, no table rewrite), so they
     are reported as ``brief-lock`` rather than ``dangerous``.  SET NOT NULL and
     type changes still require a full table scan/rewrite and stay ``dangerous``.
+    An ``ADD COLUMN`` with a volatile/non-constant DEFAULT still rewrites and is
+    flagged ``dangerous``.
     """
     s = stmt.strip()
     first = s.splitlines()[0] if s else ""
@@ -147,20 +208,33 @@ def _lock_for_sql(stmt: str, lineno: int) -> LockReport:
             alternative="backfill in batches (keyset/LIMIT-OFFSET) to avoid a long Share lock on the source table")
     if re.match(r"insert\b", s, re.I):
         return LockReport(statement=first, lineno=lineno, lock="none", rewrites=False, risk="safe", alternative="")
+    if re.match(r"create\s+(unique\s+)?index\s+concurrently\b", s, re.I):
+        # CONCURRENTLY does not block writes (unlike plain CREATE INDEX) but
+        # cannot run inside a transaction; the verify path applies it outside
+        # execute_migration's single transaction. Do not recommend itself.
+        return LockReport(
+            statement=first, lineno=lineno, lock="Share", rewrites=False, risk="online",
+            alternative="CREATE INDEX CONCURRENTLY does not block writes but cannot run inside a transaction; applied outside execute_migration's transaction by the verify path")
     if re.match(r"create\s+(unique\s+)?index\b", s, re.I):
         return LockReport(
             statement=first, lineno=lineno, lock="Share", rewrites=False, risk="brief-lock",
-            alternative="CREATE INDEX CONCURRENTLY (must run outside a transaction — separate execute_ddl call, not execute_migration)")
+            alternative="use CREATE INDEX CONCURRENTLY (must run outside a transaction — separate execute_ddl call, not execute_migration) to avoid blocking writes")
     if re.match(r"create\b", s, re.I):
         return LockReport(statement=first, lineno=lineno, lock="none", rewrites=False, risk="safe", alternative="")
     if re.match(r"(drop|truncate)\b", s, re.I):
         return LockReport(
             statement=first, lineno=lineno, lock="AccessExclusive", rewrites=False, risk="brief-lock",
             alternative="safe once contract-gate is clean (no code reads the dropped object)")
+    if re.match(r"update\s+alembic_version\b", s, re.I):
+        # single-row version stamp — safe, not a backfill
+        return LockReport(statement=first, lineno=lineno, lock="RowExclusive", rewrites=False, risk="safe", alternative="")
     if re.match(r"update\b", s, re.I):
+        # A large UPDATE backfill holds row locks and writes for the whole
+        # transaction; without a proof it is bounded/batched it is dangerous,
+        # consistent with the phase classifier labelling UPDATE a backfill.
         return LockReport(
-            statement=first, lineno=lineno, lock="RowExclusive", rewrites=False, risk="brief-lock",
-            alternative="batch the UPDATE (keyset) to keep transactions short")
+            statement=first, lineno=lineno, lock="RowExclusive", rewrites=False, risk="dangerous",
+            alternative="batch the UPDATE (keyset/LIMIT-OFFSET) to keep transactions short and avoid long row locks")
     if re.match(r"alter\b", s, re.I):
         # SET NOT NULL — full table scan, rewrites/locks heavily.
         if re.search(r"\bset\s+not\s+null\b", s, re.I):
@@ -177,11 +251,16 @@ def _lock_for_sql(stmt: str, lineno: int) -> LockReport:
             return LockReport(
                 statement=first, lineno=lineno, lock="AccessExclusive", rewrites=False, risk="brief-lock",
                 alternative="safe once contract-gate is clean (no code reads the column); PG11+ drops metadata only, no table rewrite")
-        # ADD COLUMN — brief metadata lock, no rewrite (NULL or NOT NULL DEFAULT on PG11+).
+        # ADD COLUMN — metadata-only on PG11+ UNLESS the DEFAULT is volatile /
+        # non-constant, which forces a full table + index rewrite.
         if re.search(r"\badd\s+column\b", s, re.I):
+            if _default_is_volatile(s):
+                return LockReport(
+                    statement=first, lineno=lineno, lock="AccessExclusive", rewrites=True, risk="dangerous",
+                    alternative="ADD COLUMN with a volatile/non-constant DEFAULT rewrites the table + indexes on PG11; add the column NULL first, backfill in batches, then set the default")
             return LockReport(
                 statement=first, lineno=lineno, lock="AccessExclusive", rewrites=False, risk="brief-lock",
-                alternative="ADD COLUMN ... NULL is metadata-only; ADD COLUMN NOT NULL DEFAULT is metadata-only on PG11+")
+                alternative="ADD COLUMN ... NULL or a constant/STABLE DEFAULT is metadata-only on PG11+ (no rewrite); a volatile DEFAULT forces a rewrite")
         # Generic ALTER (type change / rename / SET DEFAULT etc.) — assume a rewrite.
         return LockReport(
             statement=first, lineno=lineno, lock="AccessExclusive", rewrites=True, risk="dangerous",

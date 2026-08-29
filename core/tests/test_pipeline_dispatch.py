@@ -104,3 +104,80 @@ def test_verify_sql_path_applies_and_tests(monkeypatch, tmp_path):
     report = out.read_text()
     assert "PASS" in report
     assert "Alembic" not in report  # SQL path must not emit Alembic-specific prose
+
+
+def test_apply_sql_orders_concurrent_with_txn(monkeypatch, tmp_path):
+    """A CONCURRENTLY statement splits the run into ordered segments: the
+    pending transactional segment is flushed before the concurrent statement,
+    then a new segment begins after -- preserving order so a later statement
+    can depend on a concurrently created index."""
+    p = tmp_path / "mig.sql"
+    p.write_text(
+        "CREATE TABLE t (id int);\n"
+        "CREATE INDEX CONCURRENTLY idx ON t (id);\n"
+        "INSERT INTO t VALUES (1);\n"
+    )
+    calls = []
+
+    def fake_run(cmd, cwd, env):
+        calls.append(cmd)
+        return CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    args = argparse.Namespace(migration=str(p), dsn="postgresql://x@localhost/x")
+    ok, out = pipeline._apply_sql_migrations(tmp_path, args, {})
+    assert ok
+    # call 1: txn segment [CREATE TABLE] via --single-transaction -f
+    # call 2: concurrent CREATE INDEX via -c
+    # call 3: txn segment [INSERT] via --single-transaction -f
+    assert len(calls) == 3
+    assert "--single-transaction" in calls[0] and "-f" in calls[0]
+    assert "-c" in calls[1]
+    assert "CONCURRENTLY" in calls[1][calls[1].index("-c") + 1]
+    assert "--single-transaction" in calls[2] and "-f" in calls[2]
+
+
+def test_apply_sql_stops_when_txn_segment_fails(monkeypatch, tmp_path):
+    """A failing transactional segment stops the run; later statements
+    (including a concurrent statement) are not applied."""
+    p = tmp_path / "mig.sql"
+    p.write_text("CREATE TABLE t (id int);\nCREATE INDEX CONCURRENTLY i ON t (id);\n")
+    calls = []
+
+    def fake_run(cmd, cwd, env):
+        calls.append(cmd)
+        return CompletedProcess(cmd, 1, "", "boom")
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    args = argparse.Namespace(migration=str(p), dsn="postgresql://x@localhost/x")
+    ok, out = pipeline._apply_sql_migrations(tmp_path, args, {})
+    assert not ok
+    # only the failing transactional flush ran; the concurrent stmt never did
+    assert len(calls) == 1
+    assert "--single-transaction" in calls[0]
+
+
+def test_apply_sql_stops_when_concurrent_stmt_fails(monkeypatch, tmp_path):
+    """A failing CONCURRENTLY statement stops the run after flushing the
+    pending transactional segment; later statements are not applied."""
+    p = tmp_path / "mig.sql"
+    p.write_text(
+        "CREATE TABLE t (id int);\n"
+        "CREATE INDEX CONCURRENTLY i ON t (id);\n"
+        "INSERT INTO t VALUES (1);\n"
+    )
+    calls = []
+
+    def fake_run(cmd, cwd, env):
+        calls.append(cmd)
+        # txn segment (call 1) succeeds; the concurrent statement (call 2) fails
+        return CompletedProcess(cmd, 0 if len(calls) == 1 else 1, "", "boom")
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    args = argparse.Namespace(migration=str(p), dsn="postgresql://x@localhost/x")
+    ok, out = pipeline._apply_sql_migrations(tmp_path, args, {})
+    assert not ok
+    # call 1 = txn flush (ok), call 2 = concurrent (fails); no third call
+    assert len(calls) == 2
+    assert "--single-transaction" in calls[0]
+    assert "-c" in calls[1]

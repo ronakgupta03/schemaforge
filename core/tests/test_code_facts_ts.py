@@ -32,6 +32,10 @@ def test_attr_accesses_use_js_const_and_key():
     assert ("users", "id") in acc
     assert ("users", "email") in acc
     assert ("posts", "published") in acc
+    # a namespaced 3-part access (schema.auditLog.payload) must record the
+    # Drizzle JS constant name (auditLog), not the SQL table name (audit_log),
+    # so it keys into the impact-graph model node.
+    assert ("auditLog", "payload") in acc
 
 
 def test_from_clause_resolves_js_const_to_sql_table():
@@ -91,3 +95,23 @@ def test_post_endpoint_executes_helper_accesses_transitively():
               if n.kind == "endpoint" and n.label == "post /api/posts")
     exec_targets = {e.dst for e in g.edges if e.src == ep.id and e.kind == "executes"}
     assert exec_targets, "post /api/posts must reach loadAuthor's accesses transitively"
+
+
+def test_concise_handler_endpoint_executes():
+    # a concise arrow handler (``c => expr`` with no block body) must still
+    # produce an executes edge from its endpoint to the attr/rawsql it contains;
+    # a brace search would mis-attribute it to <module> and miss the edge.
+    from schemaforge_core.impact_graph import build
+    from schemaforge_core.models import ColumnInfo, DBSnapshot, TableInfo
+
+    snap = DBSnapshot(tables={
+        "audit_log": TableInfo(name="audit_log", columns=[
+            ColumnInfo(name="payload"), ColumnInfo(name="id"),
+        ]),
+    })
+    facts = collect_facts_ts(str(FIX))
+    g = build(snap, facts)
+    ep = next(n for n in g.nodes.values()
+              if n.kind == "endpoint" and n.label == "get /api/audit")
+    exec_targets = {e.dst for e in g.edges if e.src == ep.id and e.kind == "executes"}
+    assert exec_targets, "get /api/audit (concise handler) must execute an attr/rawsql"

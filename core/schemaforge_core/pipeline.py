@@ -167,12 +167,18 @@ def _test_dsn(dsn: str) -> str:
 def _apply_sql_migrations(
     dir_: Path, args: argparse.Namespace, env: dict
 ) -> tuple[bool, str]:
-    """Apply raw-SQL migrations as a single transaction, stopping on the first
-    failure (ON_ERROR_STOP + --single-transaction rolls the whole batch back).
+    """Apply raw-SQL migrations preserving statement order, stopping on the
+    first failure.
 
-    Statements using ``CREATE INDEX CONCURRENTLY`` cannot run inside a
-    transaction; they are separated and applied individually (each its own
-    psql call) after the transactional batch, and reported.
+    Statements are executed in their original file/statement order. A run of
+    transactional statements is applied as one ``--single-transaction`` batch
+    (ON_ERROR_STOP rolls it back atomically). A statement using
+    ``CREATE INDEX CONCURRENTLY`` cannot run inside a transaction, so the
+    pending transactional segment is flushed first, the concurrent statement is
+    applied individually (its own psql call), then a new transactional segment
+    begins — preserving order so a later statement can depend on a concurrently
+    created index. Execution stops at the first failing segment or concurrent
+    statement; later statements are not applied.
 
     Discovery matches tool detection (recursive over ``migrations/`` and
     ``drizzle/``, or a single ``--migration``), so nested/drizzle migrations
@@ -194,17 +200,16 @@ def _apply_sql_migrations(
         )
 
     batch = "\n".join(f.read_text(encoding="utf-8") for f in files)
-    txn_stmts: list[str] = []
-    conc_stmts: list[str] = []
-    for _lineno, stmt in _split_sql_statements(batch):
-        if re.search(r"\bconcurrently\b", stmt, re.I):
-            conc_stmts.append(stmt)
-        else:
-            txn_stmts.append(stmt)
-
     ok, out = True, ""
-    if txn_stmts:
-        joined = ";\n".join(txn_stmts) + ";\n"
+    seg: list[str] = []          # current transactional segment (original order)
+    conc_count = 0
+
+    def _flush() -> None:
+        """Apply the accumulated transactional segment in one transaction."""
+        nonlocal ok, out
+        if not seg:
+            return
+        joined = ";\n".join(seg) + ";\n"
         with tempfile.NamedTemporaryFile(
             "w", suffix=".sql", delete=False, dir=str(dir_)
         ) as tf:
@@ -216,20 +221,37 @@ def _apply_sql_migrations(
                  "-f", batch_path, args.dsn],
                 dir_, env,
             )
-            ok = r.returncode == 0
+            if r.returncode != 0:
+                ok = False
             out += (r.stdout + r.stderr)[-2000:]
         finally:
             Path(batch_path).unlink(missing_ok=True)
+        seg.clear()
 
-    for stmt in conc_stmts:
-        r = _run(
-            ["psql", "-v", "ON_ERROR_STOP=1", "-c", stmt, args.dsn], dir_, env
-        )
-        ok = ok and r.returncode == 0
-        out += (r.stdout + r.stderr)[-1000:]
-    if conc_stmts:
+    for _lineno, stmt in _split_sql_statements(batch):
+        if not ok:
+            break
+        if re.search(r"\bconcurrently\b", stmt, re.I):
+            # flush the pending transactional segment (preserves order), then
+            # run the concurrent statement outside a transaction.
+            _flush()
+            if not ok:
+                break
+            r = _run(
+                ["psql", "-v", "ON_ERROR_STOP=1", "-c", stmt, args.dsn],
+                dir_, env,
+            )
+            if r.returncode != 0:
+                ok = False
+            out += (r.stdout + r.stderr)[-1000:]
+            conc_count += 1
+        else:
+            seg.append(stmt)
+    if ok:
+        _flush()                 # final transactional segment
+    if conc_count:
         out += (
-            f"\n[applied {len(conc_stmts)} CONCURRENTLY statement(s) outside the "
+            f"\n[applied {conc_count} CONCURRENTLY statement(s) outside the "
             f"transaction]\n"
         )
     return ok, out
