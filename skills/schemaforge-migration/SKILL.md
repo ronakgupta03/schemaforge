@@ -213,46 +213,53 @@ Do NOT proceed to contract in the same turn.
 
 ### 15. Operator triggers contract
 The operator says "contract <change-slug>". Re-run `sf-pipeline facts` on the
-CURRENT repo (the code as deployed now) and rebuild the impact graph (steps
-3-4) so the contract-gate sees the deployed dual-write code.
+deployed code and rebuild the impact graph.
 
-### 16. Contract gate
+### 16. Contract gate (expected BLOCKED)
 ```bash
 sf-pipeline contract-gate --db out/db.json --code out/code.json --columns <table>.<col>,...
 ```
-If `BLOCKED`: list every blocker (file:label) and STOP — tell the operator
-which code still reads the old columns and must be deployed first. Do NOT
-author or apply a contract migration while blocked.
+It will almost always be `BLOCKED` — the deployed dual-write build still reads
+the old columns. That is EXPECTED: it is the signal to author and deploy the
+FINAL app (which drops those reads). Proceed to step 17. (Only if it is already
+`SAFE` — the operator already deployed a build with no old-column reads — skip
+to step 19.)
 
-### 17. Author the CONTRACT migration
-If `SAFE`: add revision `<rev>b_<slug>.py`. FIRST a reconciliation
-`INSERT..SELECT ... WHERE NOT EXISTS (...)` that backfills the new table for
-any rows the expand backfill missed (rows created after backfill), THEN the
-`drop_*` / `alter_column` cleanup (drop the old columns/constraints). Then:
+### 17. Author the FINAL app + CONTRACT migration + verify
+Author the FINAL app build (the model reads ONLY the new shape; old columns
+removed) and the CONTRACT migration (`<rev>b_<slug>.py`): FIRST a
+reconciliation `INSERT..SELECT ... WHERE NOT EXISTS (...)` that backfills the
+new table for rows the expand backfill missed (rows created after backfill),
+THEN the `drop_*` / `alter_column` cleanup. Then:
 ```bash
 sf-pipeline validate-phase --migration <contract file> --phase contract
 ```
-Must exit 0. Stage intent-to-add.
+Must exit 0. Verify in the sandbox: apply the contract migration, run the
+final tests, parity against the new shape, EXPLAIN before/after.
 
-### 18. Author the FINAL app build + verify
-The model now reads ONLY the new shape (old columns removed). Verify in the
-sandbox (step 8): apply the contract migration, run the final tests, parity
-against the new shape, EXPLAIN before/after. Write a parity SQL file for the
-contract change if columns are dropped.
+### 18. Delivery — the contract PR; END THE TURN
+Push the final app + contract migration to branch
+`schemaforge/<change-slug>-contract`, open the PR (body = contract safety
+report + gate verdict), and run the Qodo review loop (step 13). Tell the
+operator explicitly: "Contract PR opened. Deploy the FINAL app from this PR.
+When deployed and stable, tell me 'apply contract <change-slug>' and I will
+re-run the gate and apply the cleanup DDL." END THE TURN. Do NOT apply the
+DDL yet.
 
-### 19. Present contract report and PAUSE
-Present the contract safety report + the contract-gate verdict (SAFE +
-blockers resolved) and call `ask_user_question` — Approve / Deny.
+### 19. Operator confirms the final app is deployed — re-run the gate
+Re-run `sf-pipeline facts` on the now-deployed code and re-run the contract
+gate. It MUST be `SAFE` (no deployed code reads the old columns). If still
+`BLOCKED`: list every blocker and STOP — the operator has not deployed the
+final build yet.
 
-### 20. On approval — production apply (contract)
+### 20. Present contract report and PAUSE
+Present the contract safety report + the `SAFE` gate verdict and call
+`ask_user_question` — Approve / Deny.
+
+### 21. On approval — production apply (contract)
 `alembic upgrade <current>:head --sql > /workspace/out/contract.sql`, then
 `postgres-prod.execute_migration(<that SQL>)` (phase defaults to full —
 contract contains the drops). Verify `table_schema` + `row_count`.
-
-### 21. Delivery — the contract PR
-Push the contract migration + final app code to branch
-`schemaforge/<change-slug>-contract`, open the PR. Run the Qodo review loop
-(step 13).
 
 ## Output contract
 - End every phase with one status line + artifact paths.

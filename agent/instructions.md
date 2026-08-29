@@ -206,28 +206,36 @@ report whenever the target DB is not quiesced.
 13. The operator triggers contract with "contract <change-slug>". Re-run
     `sf-pipeline facts` on the CURRENT repo (the code as deployed now) and
     rebuild the impact graph.
-14. Run the contract gate for every column/table being removed:
+14. Run the contract gate for the columns/tables being removed:
     `sf-pipeline contract-gate --db out/db.json --code out/code.json --columns <table>.<col>,...`
-    If `BLOCKED`: list every blocker (file:label) and STOP — tell the
-    operator which code still reads the old columns and must be deployed
-    first. Do NOT author or apply a contract migration while blocked.
-15. If `SAFE`: author the CONTRACT migration (`<rev>b_<slug>.py`):
+    It will almost always be `BLOCKED` here — the deployed dual-write build
+    still reads the old columns. That is EXPECTED: it is the signal to
+    author and deploy the FINAL app (which drops those reads). Proceed to
+    step 15. (Only if it is `SAFE` — the operator already deployed a build
+    with no old-column reads — skip to step 17.)
+15. Author the FINAL app build (the model reads ONLY the new shape; old
+    columns removed) and the CONTRACT migration (`<rev>b_<slug>.py`):
     FIRST a reconciliation `INSERT..SELECT ... WHERE NOT EXISTS (...)` that
     backfills the new table for any rows the expand backfill missed (users
     created after backfill), THEN the `drop_*` / `alter_column` cleanup. Then
     `sf-pipeline validate-phase --migration <contract file> --phase contract`
-    (must exit 0).
-16. Author the FINAL app build: the model now reads ONLY the new shape
-    (old columns removed). Verify in the sandbox (apply the contract
-    migration, run the final tests, parity against the new shape, EXPLAIN
-    before/after).
-17. Present the contract safety report + the contract-gate verdict and
-    pause (`ask_user_question` — Approve / Deny).
-18. On approval: `alembic upgrade <current>:head --sql > out/contract.sql`,
+    (must exit 0). Verify in the sandbox (apply the contract migration, run
+    the final tests, parity against the new shape, EXPLAIN before/after).
+16. Delivery — the contract PR: push the final app + contract migration to
+    branch `schemaforge/<change-slug>-contract`, open the PR (body = contract
+    safety report + gate verdict). Tell the operator explicitly: "Contract
+    PR opened. Deploy the FINAL app from this PR. When deployed and stable,
+    tell me 'apply contract <change-slug>' and I will re-run the gate and
+    apply the cleanup DDL." END THE TURN. Do NOT apply the DDL yet.
+17. (Operator confirms the final app is deployed.) Re-run `sf-pipeline facts`
+    on the now-deployed code and re-run the contract gate. It MUST be `SAFE`
+    (no deployed code reads the old columns). If still `BLOCKED`: list every
+    blocker and STOP — the operator has not deployed the final build yet.
+18. Present the contract safety report + the `SAFE` gate verdict and pause
+    (`ask_user_question` — Approve / Deny).
+19. On approval: `alembic upgrade <current>:head --sql > out/contract.sql`,
     then `postgres-prod.execute_migration` with that SQL (phase defaults to
     full — contract contains the drops). Verify `table_schema` + `row_count`.
-19. Delivery — the contract PR: push the contract migration + final app
-    code to branch `schemaforge/<change-slug>-contract`, open the PR.
 
 ## Output contract
 - End every phase with one status line + artifact paths.
