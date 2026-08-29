@@ -52,7 +52,7 @@ def _client() -> httpx.Client:
     token = _config.get("token")
     if not token:
         raise RuntimeError(
-            "github is not configured: set a token via the Settings panel or POST /config"
+            "github is not configured: set a token in Settings -> SchemaForge (GitHub connector), or POST /config on :9002"
         )
     headers = {
         "Authorization": f"Bearer {token}",
@@ -147,6 +147,38 @@ def open_pull_request(repo: str = "", title: str = "", head: str = "", base: str
         r.raise_for_status()
     return r.json()["html_url"]
 
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
+def get_pull_request(repo: str = "", number: int = 0) -> dict:
+    """Return PR state + review comments (e.g. Qodo findings) for PR `number`."""
+    repo = _resolve_repo(repo)
+    if not repo:
+        raise ValueError("no repo: pass repo or set default_repo via POST /config")
+    if not number:
+        raise ValueError("number is required")
+    with _client() as c:
+        pr = c.get(f"{API}/repos/{repo}/pulls/{number}")
+        pr.raise_for_status()
+        prj = pr.json()
+        comments = []
+        ic = c.get(f"{API}/repos/{repo}/issues/{number}/comments")
+        if ic.status_code == 200:
+            for cm in ic.json():
+                comments.append({"user": cm["user"]["login"], "body": cm["body"], "url": cm["html_url"]})
+        reviews = []
+        rv = c.get(f"{API}/repos/{repo}/pulls/{number}/reviews")
+        if rv.status_code == 200:
+            for r in rv.json():
+                reviews.append({"user": r["user"]["login"], "state": r["state"], "body": r["body"]})
+    return {
+        "number": prj["number"],
+        "title": prj["title"],
+        "state": prj["state"],
+        "html_url": prj["html_url"],
+        "mergeable": prj.get("mergeable"),
+        "comments": comments,
+        "reviews": reviews,
+    }
+
 
 class ConfigHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -157,6 +189,9 @@ class ConfigHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
@@ -199,6 +234,15 @@ class ConfigHandler(BaseHTTPRequestHandler):
         _save_config()
         return self._send(202, {"data": {"ok": True, "configured": bool(_config.get("token"))}})
 
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 def run_config_server(host: str = "127.0.0.1") -> None:
     global _config_httpd
