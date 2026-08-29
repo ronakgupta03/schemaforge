@@ -162,3 +162,30 @@ def test_analyze_locks_alembic_version_update_is_safe(tmp_path):
     r = analyze_locks_sql(p)[0]
     assert r.risk == "safe"
     assert not r.alternative
+
+
+def test_analyze_locks_compound_volatile_default_is_heavy(tmp_path):
+    # now() + random(): the compound expression is volatile because random()
+    # is volatile, so ADD COLUMN forces a full rewrite -- not a fast default.
+    p = _write(
+        tmp_path,
+        "ALTER TABLE users ADD COLUMN x timestamptz DEFAULT now() + random() * interval '1 second';\n",
+    )
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "dangerous"
+    assert r.rewrites is True
+
+
+def test_analyze_locks_bare_stable_keyword_default_is_brief(tmp_path):
+    # CURRENT_TIMESTAMP (no parens) is STABLE -> PG11+ metadata-only fast default.
+    p = _write(tmp_path, "ALTER TABLE users ADD COLUMN created timestamptz DEFAULT CURRENT_TIMESTAMP;\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "brief-lock"
+    assert r.rewrites is False
+
+
+def test_analyze_locks_stable_keyword_with_precision_is_brief(tmp_path):
+    p = _write(tmp_path, "ALTER TABLE users ADD COLUMN created timestamptz DEFAULT CURRENT_TIMESTAMP(6);\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "brief-lock"
+    assert r.rewrites is False

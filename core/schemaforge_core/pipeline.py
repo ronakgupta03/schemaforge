@@ -231,9 +231,11 @@ def _apply_sql_migrations(
     for _lineno, stmt in _split_sql_statements(batch):
         if not ok:
             break
-        if re.search(r"\bconcurrently\b", stmt, re.I):
-            # flush the pending transactional segment (preserves order), then
-            # run the concurrent statement outside a transaction.
+        # an actual CREATE [UNIQUE] INDEX CONCURRENTLY runs outside a
+        # transaction; flush the pending transactional segment first to
+        # preserve order. "concurrently" inside a string/dollar-body does not
+        # match (the statement verb is not a concurrent index).
+        if re.match(r"create\s+(?:unique\s+)?index\s+concurrently\b", stmt.strip(), re.I):
             _flush()
             if not ok:
                 break

@@ -259,27 +259,73 @@ def _enclosing(
     return "<module>"
 
 
+def _scan_template(src: str, i: int) -> int:
+    """Given ``i`` at an opening backtick, return the index just past the
+    matching closing backtick of a TypeScript template literal, accounting for
+    ``\\``` escapes and ``${ ... }`` interpolation (braces nest; nested template
+    literals inside interpolation recurse)."""
+    i += 1  # past the opening backtick
+    n = len(src)
+    while i < n:
+        ch = src[i]
+        if ch == "\\":
+            i += 2
+        elif ch == "`":
+            return i + 1
+        elif ch == "$" and i + 1 < n and src[i + 1] == "{":
+            i += 2  # past ${, enter interpolation
+            depth = 1
+            while i < n and depth > 0:
+                c = src[i]
+                if c == "{":
+                    depth += 1
+                    i += 1
+                elif c == "}":
+                    depth -= 1
+                    i += 1
+                elif c == "`":
+                    i = _scan_template(src, i)  # nested template
+                elif c == "\\":
+                    i += 2
+                else:
+                    i += 1
+        else:
+            i += 1
+    return n  # unterminated template; consume the rest
+
+
 def _last_arg_start(args_text: str) -> int:
     """Index within ``args_text`` where the final top-level argument begins
-    (right after the last depth-0 comma), or 0 for a single argument."""
+    (right after the last depth-0 comma), or 0 for a single argument.
+
+    Commas inside single/double-quoted strings and TypeScript template literals
+    (`` `...${expr}...` ``) do not count as argument separators."""
     depth = 0
     last_comma = -1
     in_s = in_d = False
-    for i, ch in enumerate(args_text):
+    i = 0
+    n = len(args_text)
+    while i < n:
+        ch = args_text[i]
         if in_s:
-            in_s = ch != "'"
+            if ch == "'":
+                in_s = False
         elif in_d:
-            in_d = ch != '"'
+            if ch == '"':
+                in_d = False
         elif ch == "'":
             in_s = True
         elif ch == '"':
             in_d = True
+        elif ch == "`":
+            i = _scan_template(args_text, i) - 1  # -1: loop's i += 1
         elif ch in "([{":
             depth += 1
         elif ch in ")]}":
             depth -= 1
         elif ch == "," and depth == 0:
             last_comma = i
+        i += 1
     return last_comma + 1
 
 

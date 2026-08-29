@@ -159,16 +159,41 @@ def validate_phase_sql(file_path: str | Path, phase: str) -> None:
         raise ValueError(f"contract migration contains expand ops: {ops}")
 
 
-def _default_is_volatile(s: str) -> bool:
-    """True if an ``ADD COLUMN ... DEFAULT <expr>`` forces a PostgreSQL 11+ table
-    rewrite (cannot use the metadata-only fast default).
+def _matching_paren(s: str, open_idx: int) -> int:
+    """Index of the ``)`` matching the ``(`` at ``open_idx`` (string/quote
+    aware), or -1 if unbalanced."""
+    depth = 0
+    in_s = in_d = False
+    for i in range(open_idx, len(s)):
+        ch = s[i]
+        if in_s:
+            if ch == "'":
+                in_s = False
+        elif in_d:
+            if ch == '"':
+                in_d = False
+        elif ch == "'":
+            in_s = True
+        elif ch == '"':
+            in_d = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
 
-    A literal constant or a known STABLE function (now, current_timestamp, ...)
-    is metadata-only. Any other expression — volatile functions such as
-    ``clock_timestamp()``/``random()``, or an unrecognised expression — is
-    conservatively treated as volatile, matching PostgreSQL's rule that a
-    volatile default cannot reuse the fast-default shortcut and rewrites the
-    whole table and its indexes.
+
+def _default_is_volatile(s: str) -> bool:
+    """True if an ``ADD COLUMN ... DEFAULT <expr>`` forces a PostgreSQL 11+
+    table rewrite (cannot use the metadata-only fast default).
+
+    A literal constant or a known STABLE keyword/expression (now, current_*) is
+    metadata-only. A compound expression (e.g. ``now() + random()``) is volatile
+    because PostgreSQL evaluates the volatility of the *entire* expression, so
+    any volatile sub-term forces a rewrite. Any other unrecognised expression is
+    conservatively treated as volatile.
     """
     m = re.search(r"\bdefault\b\s+(.+)", s, re.I | re.DOTALL)
     if not m:
@@ -181,10 +206,23 @@ def _default_is_volatile(s: str) -> bool:
     # literal constants -> metadata-only
     if re.match(r"^(?:'[^']*'|\"[^\"]*\"|-?\d+(?:\.\d+)?|true|false|null)\s*$", expr, re.I):
         return False
-    # known STABLE function call -> metadata-only
+    # bare STABLE SQL keywords (optionally with precision) -> metadata-only:
+    #   CURRENT_TIMESTAMP[(p)], CURRENT_DATE, CURRENT_TIME[(p)],
+    #   LOCALTIMESTAMP[(p)], LOCALTIME[(p)], TRANSACTION_TIMESTAMP[(p)],
+    #   STATEMENT_TIMESTAMP[(p)]. (clock_timestamp() is volatile -- excluded.)
+    if re.match(
+        r"^(?:current_timestamp|current_date|current_time|localtimestamp|localtime"
+        r"|transaction_timestamp|statement_timestamp)\b(?:\s*\(\s*\d+\s*\))?\s*$",
+        expr, re.I):
+        return False
+    # a single known-STABLE function call spanning the WHOLE expression ->
+    # metadata-only. A compound expression (now() + random()) is volatile: the
+    # closing paren of the first call is not the end of the expression.
     fm = re.match(r"^([A-Za-z_]\w*)\s*\(", expr)
     if fm and fm.group(1).lower() in _NONVOLATILE_DEFAULT_FNS:
-        return False
+        close = _matching_paren(expr, expr.index("("))
+        if close == len(expr) - 1:
+            return False
     # any other expression -> conservatively volatile (rewrite)
     return True
 

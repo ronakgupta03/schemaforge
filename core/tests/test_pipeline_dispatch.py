@@ -181,3 +181,29 @@ def test_apply_sql_stops_when_concurrent_stmt_fails(monkeypatch, tmp_path):
     assert len(calls) == 2
     assert "--single-transaction" in calls[0]
     assert "-c" in calls[1]
+
+
+def test_apply_sql_concurrently_in_string_stays_transactional(monkeypatch, tmp_path):
+    """A 'concurrently' inside a string literal or dollar-quoted body must NOT
+    split the batch -- only an actual CREATE INDEX CONCURRENTLY statement runs
+    outside the transaction; the rest stay in one transactional segment."""
+    p = tmp_path / "mig.sql"
+    p.write_text(
+        "INSERT INTO logs VALUES ('CREATE INDEX CONCURRENTLY x');\n"
+        "CREATE FUNCTION f() AS $$ CREATE INDEX CONCURRENTLY y $$ LANGUAGE sql;\n"
+        "CREATE TABLE t (id int);\n"
+    )
+    calls = []
+
+    def fake_run(cmd, cwd, env):
+        calls.append(cmd)
+        return CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    args = argparse.Namespace(migration=str(p), dsn="postgresql://x@localhost/x")
+    ok, out = pipeline._apply_sql_migrations(tmp_path, args, {})
+    assert ok
+    # no concurrent (-c) call fired; all 3 statements ran in one txn segment
+    assert len(calls) == 1
+    assert "--single-transaction" in calls[0]
+    assert "-c" not in calls[0]

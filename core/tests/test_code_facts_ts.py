@@ -115,3 +115,12 @@ def test_concise_handler_endpoint_executes():
               if n.kind == "endpoint" and n.label == "get /api/audit")
     exec_targets = {e.dst for e in g.edges if e.src == ep.id and e.kind == "executes"}
     assert exec_targets, "get /api/audit (concise handler) must execute an attr/rawsql"
+
+
+def test_last_arg_start_ignores_template_literal_commas():
+    from schemaforge_core.code_facts_ts import _last_arg_start
+    # the last argument is the arrow handler 'c => ...', NOT split at the comma
+    # inside the template literal or its ${} interpolation.
+    inner = "'/x', c => sql`SELECT ${a.id}, literal`"
+    start = _last_arg_start(inner)
+    assert inner[start:].lstrip() == "c => sql`SELECT ${a.id}, literal`"
