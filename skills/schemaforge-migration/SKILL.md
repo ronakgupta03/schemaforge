@@ -55,11 +55,20 @@ here is tied to a specific codebase.
    blocker and STOP — tell the operator which code still reads the old
    columns and must be deployed first.
 8. **Expand is additive only.** Expand migrations use `create_table`,
-   `add_column` (nullable or with a default), `create_index`, and
-   `INSERT..SELECT` backfill — NO `drop_*`, NO `alter_column(..., nullable=False)`,
-   NO `alter_column(..., type=...)`. `execute_migration(phase='expand')`
-   mechanically rejects contractive verbs (DROP, SET NOT NULL, ALTER COLUMN
-   TYPE), so a mis-authored expand fails safely.
+   `add_column` (nullable or with a default), `create_index`,
+   `INSERT..SELECT` backfill, and `alter_column(..., nullable=True)` (DROP
+   NOT NULL) on legacy columns the final app will stop writing — NO `drop_*`,
+   NO `alter_column(..., nullable=False)` (SET NOT NULL is contractive), NO
+   `alter_column(..., type=...)`. `execute_migration(phase='expand')` is an
+   additive ALLOWLIST (CREATE, INSERT backfill, ADD COLUMN/CONSTRAINT, ALTER
+   COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE CONSTRAINT); everything else
+   is rejected, so a mis-authored expand fails safely.
+9. **Concurrent-write scope.** The expand backfill + the contract
+   reconciliation handle a quiesced/low-write window, and the expand app
+   build dual-writes. Truly concurrent writes during the contract drops need
+   app-level dual-write or a brief cutover quiesce — the application's
+   responsibility, not the migration agent's. State this scope in the safety
+   report whenever the target DB is not quiesced.
 
 ## Steps
 
@@ -123,9 +132,13 @@ sf-pipeline bench --dsn $DATABASE_URL --queries <app query file(s)> --out out/ex
 ### 6. Author the EXPAND migration
 In `/workspace/app`: add a new revision `<rev>a_<slug>.py` (e.g. Alembic
 `alembic revision`). Additive ONLY — `create_table`, `add_column` (nullable
-or with a default), `create_index`, and `INSERT..SELECT` backfill. NO
-`drop_*`, NO `alter_column(..., nullable=False)`, NO `alter_column(..., type=...)`
-(a type change rewrites the table — it is contractive). Then validate it:
+or with a default), `create_index`, `INSERT..SELECT` backfill, and
+`alter_column(..., nullable=True)` (DROP NOT NULL) on any legacy column the
+final app will stop writing (so the final app build can insert rows without
+it during the expand->contract window). NO `drop_*`, NO
+`alter_column(..., nullable=False)` (SET NOT NULL is contractive), NO
+`alter_column(..., type=...)` (a type change rewrites the table — it is
+contractive). Then validate it:
 ```bash
 sf-pipeline validate-phase --migration <expand file> --phase expand
 ```
@@ -212,8 +225,10 @@ which code still reads the old columns and must be deployed first. Do NOT
 author or apply a contract migration while blocked.
 
 ### 17. Author the CONTRACT migration
-If `SAFE`: add revision `<rev>b_<slug>.py` with ONLY the `drop_*` /
-`alter_column` cleanup (drop the old columns/constraints). Then:
+If `SAFE`: add revision `<rev>b_<slug>.py`. FIRST a reconciliation
+`INSERT..SELECT ... WHERE NOT EXISTS (...)` that backfills the new table for
+any rows the expand backfill missed (rows created after backfill), THEN the
+`drop_*` / `alter_column` cleanup (drop the old columns/constraints). Then:
 ```bash
 sf-pipeline validate-phase --migration <contract file> --phase contract
 ```

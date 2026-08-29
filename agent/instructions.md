@@ -134,6 +134,14 @@ expand → deploy → contract sequence. You NEVER apply a contract migration
 in the same turn as an expand migration, and you NEVER propose a contract
 until the deterministic contract-gate is clean.
 
+Concurrent-write scope: the expand backfill + the contract reconciliation
+(a second `INSERT..SELECT` for rows created after backfill) handle a
+quiesced or low-write window, and the expand app build dual-writes. Truly
+concurrent writes during the contract drops themselves need app-level
+dual-write or a brief cutover quiesce — that is the application's
+responsibility, not the migration agent's. State this scope in the safety
+report whenever the target DB is not quiesced.
+
 ### Phase 1 — EXPAND (apply now; additive, safe under live traffic)
 1. Configuration check FIRST: confirm `postgres-prod.list_tables` succeeds;
    on `not configured`/connection error → STOP, ask for the DSN, wait.
@@ -146,10 +154,14 @@ until the deterministic contract-gate is clean.
    files/endpoints.
 5. Author the EXPAND migration (`alembic/versions/<rev>a_<slug>.py`):
    additive only — `create_table`, `add_column` (nullable or with default),
-   `create_index`, and `INSERT..SELECT` backfill. NO `drop_*`, NO
-   `alter_column(..., nullable=False)`, NO `alter_column(..., type=...)`
-   (a type change rewrites the table — it is contractive). Then validate
-   it: `sf-pipeline validate-phase --migration <expand file> --phase expand`
+   `create_index`, `INSERT..SELECT` backfill, and `alter_column(...,
+   nullable=True)` (DROP NOT NULL) on any legacy column the FINAL app will
+   stop writing, so the final app build can insert rows without it during
+   the expand->contract window. NO `drop_*`, NO
+   `alter_column(..., nullable=False)` (SET NOT NULL is contractive), NO
+   `alter_column(..., type=...)` (a type change rewrites the table — it is
+   contractive). Then validate it:
+   `sf-pipeline validate-phase --migration <expand file> --phase expand`
    (must exit 0; fix any contract op it flags).
 6. Author the DUAL-WRITE app build for the expand window: keep the old
    columns on the model (the expand migration did NOT drop them) AND add
@@ -176,10 +188,12 @@ until the deterministic contract-gate is clean.
    or re-verify before the pause.)
 10. On approval: `cd /workspace/app && alembic upgrade <current>:head --sql > /workspace/out/expand.sql`,
     then call `postgres-prod.execute_migration` with that SQL and
-    `phase='expand'`. (The MCP guard mechanically rejects any contractive
-    verb — DROP, SET NOT NULL, ALTER COLUMN TYPE — so a mis-authored expand
-    fails safely rather than touching prod.) After it returns, verify with
-    `table_schema` + `row_count`.
+    `phase='expand'`. (The MCP guard is an additive ALLOWLIST: it accepts
+    CREATE, INSERT backfill, ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT,
+    DROP NOT NULL, and VALIDATE CONSTRAINT, and rejects everything else
+    (DROP, SET NOT NULL, ALTER COLUMN TYPE, RENAME, SET TABLESPACE) so a
+    mis-authored expand fails safely rather than touching prod.) After it
+    returns, verify with `table_schema` + `row_count`.
 11. Delivery — the expand PR: push the expand migration + dual-write app
     code to branch `schemaforge/<change-slug>-expand` via github MCP and
     open the PR (body = safety report + impact graph + lock report).
@@ -197,8 +211,10 @@ until the deterministic contract-gate is clean.
     If `BLOCKED`: list every blocker (file:label) and STOP — tell the
     operator which code still reads the old columns and must be deployed
     first. Do NOT author or apply a contract migration while blocked.
-15. If `SAFE`: author the CONTRACT migration (`<rev>b_<slug>.py`) with only
-    the `drop_*` / `alter_column` cleanup, then
+15. If `SAFE`: author the CONTRACT migration (`<rev>b_<slug>.py`):
+    FIRST a reconciliation `INSERT..SELECT ... WHERE NOT EXISTS (...)` that
+    backfills the new table for any rows the expand backfill missed (users
+    created after backfill), THEN the `drop_*` / `alter_column` cleanup. Then
     `sf-pipeline validate-phase --migration <contract file> --phase contract`
     (must exit 0).
 16. Author the FINAL app build: the model now reads ONLY the new shape
