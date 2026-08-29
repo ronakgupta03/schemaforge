@@ -86,8 +86,21 @@ explains — it never guesses about code or schema.
   tools — the harness pauses for a human regardless of what the model did
   or claimed.
 - **Backfills cannot duplicate data.** `INSERT … SELECT` is accepted only
-  for tables created by the migration itself — a backfill targeting an
-  already-existing table is rejected and rolled back.
+  for tables created by the migration itself (a plain backfill targeting an
+  already-existing table is rejected and rolled back); a guarded
+  `INSERT … SELECT … WHERE NOT EXISTS` reconciliation is allowed to backfill
+  stragglers into an existing table idempotently.
+- **Expand-only guard.** `execute_migration` takes a `phase='expand'` mode
+  that rejects any `DROP`/`TRUNCATE`/`ALTER`, so an additive apply can never
+  remove or modify existing schema — only create new objects and backfill.
+- **Two-phase expand/contract (zero-downtime).** For live-traffic splits the
+  workflow runs an additive **expand** phase (create + dual-write + backfill)
+  that is safe under load, then a later **contract** phase (drop the old
+  columns). The contract is gated by `sf-pipeline contract-gate`, which proves
+  *no deployed code reads the columns being dropped* — and BLOCKS (rather
+  than silently passing) when a requested column is absent from the graph
+  (typo or stale DB snapshot). The contract phase can only run after the
+  operator deploys the final app build.
 - **Rollback is real.** The split migration's `downgrade()` is guarded: it
   is blocked with a clear error if any user lacks a profile row, rather
   than fabricating data. (The baseline revision 0001's downgrade is
@@ -210,6 +223,32 @@ the `NOT NULL` alteration fails. Fixed by a guard that blocks rollback with
 an explicit diagnostic when any user lacks a profile (live-verified both
 paths; the golden reference received the same guard). Re-review: **Bugs 0**.
 
+### PR #31 — Two-phase expand/contract workflow (`feat/two-phase-workflow`, merged `2c68045`)
+
+Qodo surfaced **9 findings across review rounds**; all resolved to **Bugs 0**:
+
+| Finding (severity)                         | What Qodo caught                                                  | Resolution                                                                                                   |
+| ------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Contract gate cannot become safe (Correctness) | gate ran on the dual-write build and BLOCKED forever            | Reordered: author + deploy the final app first, then re-run the gate on the deployed final code              |
+| Contract drops precede app delivery (Reliability) | contract DDL applied before the final app was deployed        | DDL now runs only after the operator confirms the final app is deployed                                      |
+| Contract reconciliation always fails (Correctness) | `validate-phase`/`execute_migration` rejected the reconciliation INSERT..SELECT | Guarded `WHERE NOT EXISTS` INSERT..SELECT reclassified phase-neutral and allowed into an existing table |
+| Gate can approve unknown columns (Correctness) | an absent/typo column returned SAFE, bypassing the gate          | An absent requested column is now a hard BLOCKER (`kind: absent`)                                            |
+| Gate scans unverified checkout (Reliability) | facts scanned the locally-modified sandbox tree, not deployed code | Workflow forces a fresh `git fetch` + `reset --hard` to the operator's deployed branch before facts        |
+| Contract SQL range is empty (Correctness)  | `alembic upgrade <current>:head --sql` rendered nothing post-apply | Capture `alembic current` (expand head) before the sandbox apply; render from that revision                  |
+| DROP NOT NULL rejected (Correctness)        | expand-phase verb allowlist rejected `ALTER ... SET NOT NULL`     | Contractive `ALTER` sub-actions (drop column / set not null) allowed in the contract phase                    |
+| Contract SQL range is empty (dup) (Correctness) | stale inline thread resurfaced                                | Resolved on re-review; threaded review confirmed                                                                 |
+| Expand phase call unsupported (Correctness) | workflow referenced an undefined pipeline sub-command            | Fixed in instructions + skill                                                                                  |
+
+### PR #32 — Phased expand/contract reference (`feat/phased-reference`, merged `073ae68`)
+
+Qodo surfaced **4 findings**; the mixed-ALTER smuggling bug and the
+nullable-downgrade gap were fixed (contractive-sub-action guard + restored
+`NOT NULL` in the downgrade). The two recurring zero-downtime findings
+(final-deploy breaks creates, backfill misses concurrent writes) are resolved
+by design — the expand makes the dropped column nullable first so the final
+app's inserts succeed — with the residual concurrent-write-during-drops gap
+documented as a known limitation requiring app-level quiesce, per the
+pragmatic zero-downtime scope decision.
 Qodo's review comments are visible on each PR; the workflow is a required
 hackathon gate, so no substantive change merges without it.
 
