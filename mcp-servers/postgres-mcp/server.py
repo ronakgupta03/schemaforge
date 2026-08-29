@@ -333,6 +333,14 @@ def execute_migration(sql: str, phase: str | None = None) -> str:
     phase='expand' rejects any statement whose first verb is DROP/TRUNCATE/ALTER
     (the expand migration must be purely additive: create new + backfill only).
     """
+    # Fail-closed: the only valid phase values are None (full/contract mode,
+    # backward-compatible — no guard) and 'expand' (additive guard). Any
+    # other value (typo, wrong case, 'contract') is rejected so a misspelled
+    # phase never silently bypasses the expand guard.
+    if phase not in (None, "expand"):
+        raise ValueError(
+            f"invalid phase {phase!r}; must be None (full mode) or 'expand'"
+        )
     statements = _split_statements(sql)
     if not statements:
         raise ValueError("empty migration batch")

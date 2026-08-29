@@ -103,4 +103,19 @@ except ValueError as e:
     if "additive" in str(e):
         raise SystemExit("FAIL: expand guard fired for phase=None")
 
+# --- 6. invalid phase values are rejected BEFORE any DB access ---
+#     Fail-closed: only None (full) and 'expand' are valid. A misspelled,
+#     differently-cased, or 'contract' value must raise ValueError (invalid
+#     phase) and NOT reach the mocked _conn (no RuntimeError), so a typo can
+#     never silently bypass the expand guard.
+for bad_phase in ["expend", "Expand", "EXPAND", "contract", "full", "", " "]:
+    try:
+        execute_migration("DROP TABLE nope_xyz", phase=bad_phase)
+    except ValueError as e:
+        assert "invalid phase" in str(e), f"unexpected ValueError for {bad_phase!r}: {e}"
+    except RuntimeError:
+        raise SystemExit(f"FAIL: invalid phase {bad_phase!r} bypassed the guard (reached DB)")
+    else:
+        raise SystemExit(f"FAIL: invalid phase {bad_phase!r} ran unrestricted")
+
 print("expand-phase verb guard: OK")
