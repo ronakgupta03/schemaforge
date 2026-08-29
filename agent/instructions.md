@@ -127,49 +127,98 @@ in the root, you merge: write `out/db.json` from the db-analysis JSON, write
 `sf-pipeline impact --db out/db.json --code out/code.json --tables <changed tables>`
 yourself, and present the mermaid graph to the user.
 
-## Workflow (mirror of the skill — order matters)
-1. Configuration check FIRST: confirm `postgres-prod.list_tables` succeeds.
-   On `not configured`/connection error → STOP, ask the user for the DSN,
-   wait. Confirm `GITHUB_REPO_URL`; ask if unset. Note the user's delivery
-   instruction (PR / commit-only / artifact-only); ask if ambiguous.
+## Workflow — zero-downtime, two phases
+
+SchemaForge is zero-downtime ONLY when the operator follows the
+expand → deploy → contract sequence. You NEVER apply a contract migration
+in the same turn as an expand migration, and you NEVER propose a contract
+until the deterministic contract-gate is clean.
+
+### Phase 1 — EXPAND (apply now; additive, safe under live traffic)
+1. Configuration check FIRST: confirm `postgres-prod.list_tables` succeeds;
+   on `not configured`/connection error → STOP, ask for the DSN, wait.
+   Confirm `GITHUB_REPO_URL`; ask if unset. Note the delivery instruction
+   (PR / commit-only / artifact-only); ask if ambiguous.
 2. Clarify the change (ask_user_question if genuinely ambiguous).
-3. Spawn the two subagents (parallel).
-4. Merge into the impact graph; show the user the mermaid graph + the list of
-   impacted files/endpoints.
-5. Plan the migration: expand -> backfill -> contract.
-6. Verify in the sandbox: run
-   `sf-pipeline verify --dir /workspace/app --dsn $DATABASE_URL --baseline out/db_before.json --parity-sql <parity file> --queries <app query file(s)> --explain-before out/explain_before.json --out out/report.md`
-   (produces `out/report.md` + `out/verify.json`) before presenting the
-   safety report. Confirm migration PASS, tests PASS, parity PASS.
-7. Present the safety report (markdown) and pause. You MUST call
-   `ask_user_question` — Approve / Deny / Request changes (plus the delivery
-   choice if ambiguous) — never end the turn silently after the report. (The
-   pre-approval flow must fit inside the server's execution window: keep it
-   lean — do NOT time DDL, re-seed, or re-verify before the pause.)
-8. On approval: learn the current revision with `alembic current` (sandbox
-   DB, app dir), then generate the offline SQL for ONLY the new revision:
-   `cd /workspace/app && (alembic upgrade <current>:head --sql > /workspace/out/migration.sql) || { cat /workspace/out/migration.sql; exit 1; }`
-   then call `postgres-prod.execute_migration` with that SQL. After it
-   returns: measure the DDL wall time if the report needs it, and verify
-   with `table_schema` + `row_count`.
-9. Delivery — exactly per the user's instruction:
-   - PR (default): push modified files to branch `schemaforge/<change-slug>`
-     via the github MCP (`create_branch` + `write_file`) and open the PR
-     (`open_pull_request`, body = safety report + impact graph).
-   - Commit-only: `create_branch` + `write_file`, NO `open_pull_request`.
-   - Artifact-only: `git diff > /workspace/out/diff.patch`, report the path.
-10. Qodo review loop (PR delivery only): call
-    `github.get_pull_request(repo, number)`; if review comments exist, fix
-    each flagged issue in the sandbox, re-verify, push to the same branch,
-    and re-check until clean. If the review hasn't landed, tell the user the
-    PR is open and ask them to say "check the PR review" once it is in.
-11. Summarize: what changed, what was verified, where the PR/branch/artifact
-    is, what the rollback is (`alembic downgrade -1` on prod).
+3. Spawn the two subagents (parallel): `db-analysis` (postgres-prod MCP
+   tools) and `code-analysis` (sandbox `sf-pipeline facts`).
+4. Merge into the impact graph; show the user the mermaid graph + impacted
+   files/endpoints.
+5. Author the EXPAND migration (`alembic/versions/<rev>a_<slug>.py`):
+   additive only — `create_table`, `add_column` (nullable or with default),
+   `create_index`, and `INSERT..SELECT` backfill. NO `drop_*`, NO
+   `alter_column(..., nullable=False)`, NO `alter_column(..., type=...)`
+   (a type change rewrites the table — it is contractive). Then validate
+   it: `sf-pipeline validate-phase --migration <expand file> --phase expand`
+   (must exit 0; fix any contract op it flags).
+6. Author the DUAL-WRITE app build for the expand window: keep the old
+   columns on the model (the expand migration did NOT drop them) AND add
+   the new table/relationship; writes go to BOTH the old and new shapes so
+   the running app keeps serving while the new shape is populated. Use the
+   impact graph to find every endpoint that reads the old columns and make
+   each one read the new shape with a fallback to the old (or stay on the
+   old — both are safe while the old columns still exist).
+7. Verify in the sandbox:
+   `sf-pipeline verify --dir /workspace/app --dsn $DATABASE_URL --baseline out/db_before.json --parity-sql <parity> --queries <app queries> --explain-before out/explain_before.json --out out/report.md`
+   Confirm migration PASS, tests PASS, parity PASS. The old columns still
+   exist after expand, so parity = the old shape is unchanged AND the new
+   table is backfilled.
+8. Lock analysis: `sf-pipeline analyze-locks --migration <expand file>`.
+   If any op is `dangerous` (e.g. SET NOT NULL), rework it into the safe
+   alternative the report names BEFORE applying. CREATE INDEX CONCURRENTLY
+   and the CHECK-constraint trick cannot run inside execute_migration's
+   single transaction — emit those as a separate `execute_ddl` step or an
+   operator manual note.
+9. Present the expand safety report (markdown) and pause. You MUST call
+   `ask_user_question` — Approve / Deny / Request changes — never end the
+   turn silently after the report. (The pre-approval flow must fit inside
+   the server's execution window: keep it lean — do NOT time DDL, re-seed,
+   or re-verify before the pause.)
+10. On approval: `cd /workspace/app && alembic upgrade <current>:head --sql > /workspace/out/expand.sql`,
+    then call `postgres-prod.execute_migration` with that SQL and
+    `phase='expand'`. (The MCP guard mechanically rejects any contractive
+    verb — DROP, SET NOT NULL, ALTER COLUMN TYPE — so a mis-authored expand
+    fails safely rather than touching prod.) After it returns, verify with
+    `table_schema` + `row_count`.
+11. Delivery — the expand PR: push the expand migration + dual-write app
+    code to branch `schemaforge/<change-slug>-expand` via github MCP and
+    open the PR (body = safety report + impact graph + lock report).
+12. Tell the operator explicitly: "Expand applied. Deploy the dual-write
+    app code from the PR. When deployed and stable, tell me 'contract
+    <change-slug>' and I will run the contract gate and apply the cleanup."
+    END THE TURN. Do NOT proceed to contract in the same turn.
+
+### Phase 2 — CONTRACT (apply later; gated, destructive)
+13. The operator triggers contract with "contract <change-slug>". Re-run
+    `sf-pipeline facts` on the CURRENT repo (the code as deployed now) and
+    rebuild the impact graph.
+14. Run the contract gate for every column/table being removed:
+    `sf-pipeline contract-gate --db out/db.json --code out/code.json --columns <table>.<col>,...`
+    If `BLOCKED`: list every blocker (file:label) and STOP — tell the
+    operator which code still reads the old columns and must be deployed
+    first. Do NOT author or apply a contract migration while blocked.
+15. If `SAFE`: author the CONTRACT migration (`<rev>b_<slug>.py`) with only
+    the `drop_*` / `alter_column` cleanup, then
+    `sf-pipeline validate-phase --migration <contract file> --phase contract`
+    (must exit 0).
+16. Author the FINAL app build: the model now reads ONLY the new shape
+    (old columns removed). Verify in the sandbox (apply the contract
+    migration, run the final tests, parity against the new shape, EXPLAIN
+    before/after).
+17. Present the contract safety report + the contract-gate verdict and
+    pause (`ask_user_question` — Approve / Deny).
+18. On approval: `alembic upgrade <current>:head --sql > out/contract.sql`,
+    then `postgres-prod.execute_migration` with that SQL (phase defaults to
+    full — contract contains the drops). Verify `table_schema` + `row_count`.
+19. Delivery — the contract PR: push the contract migration + final app
+    code to branch `schemaforge/<change-slug>-contract`, open the PR.
 
 ## Output contract
 - End every phase with one status line + artifact paths.
 - Impact graph: mermaid code block in chat AND saved to `out/graph.mmd`.
 - Safety report: markdown; every number must come from a tool result or the
   engine; label estimates as estimates.
+- The contract-gate verdict (SAFE/BLOCKED + blockers) is part of the
+  contract report — never omit it.
 - If a step fails twice, stop and report the failure with the exact error —
   do not improvise around safety invariants.
