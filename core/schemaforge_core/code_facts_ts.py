@@ -5,6 +5,11 @@ Hono/Express-style router. Pure-Python static extraction — no tree-sitter, no
 Node runtime. Column *types* are not parsed: they come from the live DB
 snapshot. Two passes mirror the Python extractor (models first -> name map,
 then endpoints/accesses/raw_sql/calls).
+
+Three reference styles are resolved:
+  * namespace — ``import * as schema``  ; ``schema.users.email``, ``.from(schema.users)``
+  * direct     — ``import { users }``      ; ``users.email``, ``.from(users)``
+  * aliased    — ``import { users as u }``; ``u.email``, ``.from(u)``
 """
 from __future__ import annotations
 
@@ -12,16 +17,12 @@ import re
 from pathlib import Path
 
 from .models import (
-    AttrAccess,
-    CodeFacts,
-    EndpointFact,
-    FunctionCall,
-    ModelFact,
-    RawSqlRef,
+    AttrAccess, CodeFacts, EndpointFact, FunctionCall, ModelFact, RawSqlRef,
 )
 
 _BUILDERS = ("pgTable", "sqliteTable", "mysqlTable")
 _SKIP_DIRS = {"node_modules", "dist", "build", ".git", ".next", "coverage"}
+_TS_SUFFIXES = (".ts", ".tsx")
 
 # export const NAME = BUILDER('table', {  ... (capture up to the column-object '{')
 _RE_MODEL = re.compile(
@@ -30,27 +31,31 @@ _RE_MODEL = re.compile(
 )
 # column key: builder('sqlname'   OR  key: builder() (no name)
 _RE_COL_NAMED = re.compile(r"(\w+)\s*:\s*\w+\s*\(\s*(['\"])(?P<sql>[^'\"]+)\2")
-_RE_COL_KEYS = re.compile(r"(\w+)\s*:\s*")
+_RE_COL_KEY = re.compile(r"(\w+)\s*:\s*")
 # ROUTER.METHOD('/path', handler)  — any router var (Hono/Express)
 _RE_ROUTE = re.compile(
     r"\b(\w+)\.(?P<method>get|post|put|patch|delete)\s*\(\s*"
     r"(['\"])(?P<path>[^'\"]+)\3\s*,"
 )
-_RE_SCHEMA_ACCESS = re.compile(r"schema\.(\w+)\.(\w+)")
-_RE_FROM_SCHEMA = re.compile(r"\.from\(\s*schema\.(\w+)\s*\)")
-# .insert/update/delete(schema.X) — table-level writes
-_RE_TABLE_WRITE = re.compile(r"\.(?:insert|update|delete)\(\s*schema\.(\w+)\s*\)")
+# imports: named ({ a, b as c }) and namespace (* as ns)
+_RE_IMPORT_NAMED = re.compile(r"import\s*\{([^}]*)\}")
+_RE_IMPORT_NS = re.compile(r"import\s*\*\s*as\s+(\w+)\b")
+# query args: .from(ARG) / .insert|update|delete(ARG)  — ARG may be schema.x or a bare ident
+_RE_FROM = re.compile(r"\.from\(\s*([\w.]+)\s*\)")
+_RE_WRITE = re.compile(r"\.(?:insert|update|delete)\(\s*([\w.]+)\s*\)")
 _RE_DB_QUERY = re.compile(r"\bdb\.query\.(\w+)\b")
 _RE_SQL_TICK = re.compile(r"sql`([^`]*)`")
+# attribute access: NS.TABLE.COL (3-part) or TABLE.COL (2-part), leftmost-longest
+_RE_ACCESS = re.compile(r"(\w+)\.(\w+)\.(\w+)|(\w+)\.(\w+)")
 # named function call: foo(...) where foo is a declared function name
 _RE_CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 
 
 def _iter_ts(root: Path):
-    for p in sorted(root.rglob("*.ts")):
-        if any(part in _SKIP_DIRS for part in p.parts):
-            continue
-        yield p
+    """Yield ``.ts`` and ``.tsx`` source files, skipping vendored dirs."""
+    for p in sorted(root.rglob("*")):
+        if p.suffix in _TS_SUFFIXES and not any(part in _SKIP_DIRS for part in p.parts):
+            yield p
 
 
 def _balance(src: str, open_idx: int, open_ch: str = "{", close_ch: str = "}") -> int:
@@ -88,16 +93,40 @@ def _line_of(src: str, idx: int) -> int:
 
 
 def _column_sql_names(obj_body: str) -> list[str]:
-    """SQL column names: first string arg of each builder, fallback the JS key."""
+    """SQL column names: first string arg of each TOP-LEVEL column builder,
+    fallback the JS key.
+
+    Only top-level properties of the table's column object are inspected (brace
+    depth 0), so nested option objects such as ``{ length: 255 }`` are not
+    mistaken for database columns.
+    """
     named = {m.group(1): m.group("sql") for m in _RE_COL_NAMED.finditer(obj_body)}
     cols: list[str] = []
     seen: set[str] = set()
-    for m in _RE_COL_KEYS.finditer(obj_body):
-        key = m.group(1)
-        sql = named.get(key, key)  # fallback to JS key when no name arg
-        if sql not in seen:
-            seen.add(sql)
-            cols.append(sql)
+    depth = 0
+    i = 0
+    n = len(obj_body)
+    while i < n:
+        ch = obj_body[i]
+        if ch == "{":
+            depth += 1
+            i += 1
+        elif ch == "}":
+            depth -= 1
+            i += 1
+        elif depth == 0 and (ch.isalnum() or ch == "_"):
+            m = _RE_COL_KEY.match(obj_body, i)
+            if m:
+                key = m.group(1)
+                sql = named.get(key, key)  # fallback to JS key when no name arg
+                if sql not in seen:
+                    seen.add(sql)
+                    cols.append(sql)
+                i = m.end()
+            else:
+                i += 1
+        else:
+            i += 1
     return cols
 
 
@@ -120,27 +149,79 @@ def _collect_models(src: str, rel: str, facts: CodeFacts) -> dict[str, str]:
     return name_map
 
 
-def _resolve_tables(handler_body: str, name_map: dict[str, str]) -> list[str]:
-    """SQL table names touched: .from(schema.X) / .insert/update/delete(schema.X)
-    / db.query.X / any schema.X inside sql``."""
+def _parse_imports(src: str, name_map: dict[str, str]) -> tuple[dict[str, str], set[str]]:
+    """Build (ident_map, namespaces) from a file's import statements.
+
+    ``ident_map`` maps a local identifier to the original table jsname, but only
+    for named imports whose original name is a known Drizzle table (in
+    ``name_map``) — so unrelated imports (``eq``, ``sql``, ``Hono``) are ignored.
+    ``namespaces`` is the set of ``import * as X`` names. The conventional
+    ``schema`` namespace is always included so ``schema.X`` references resolve
+    even when the import is implicit.
+    """
+    ident_map: dict[str, str] = {}
+    namespaces: set[str] = {"schema"}
+    for m in _RE_IMPORT_NS.finditer(src):
+        namespaces.add(m.group(1))
+    for m in _RE_IMPORT_NAMED.finditer(src):
+        for item in m.group(1).split(","):
+            item = item.strip()
+            if not item:
+                continue
+            mm = re.match(r"(\w+)(?:\s+as\s+(\w+))?", item)
+            if not mm:
+                continue
+            orig, local = mm.group(1), mm.group(2) or mm.group(1)
+            if orig in name_map:
+                ident_map[local] = orig
+    return ident_map, namespaces
+
+
+def _resolve_arg(arg: str, ident_map: dict[str, str],
+                 name_map: dict[str, str], namespaces: set[str]) -> str:
+    """Resolve a query argument (``schema.x`` or a bare identifier) to a SQL
+    table name, or '' if it is not a known table."""
+    arg = arg.strip()
+    if not arg:
+        return ""
+    parts = arg.split(".")
+    if len(parts) == 2 and parts[0] in namespaces:  # NS.TABLE
+        return name_map.get(parts[1], parts[1])
+    if len(parts) == 1:  # bare identifier (direct / aliased import)
+        if arg in ident_map:
+            return name_map.get(ident_map[arg], ident_map[arg])
+        if arg in name_map:
+            return name_map[arg]
+    return ""
+
+
+def _tables_in_text(text: str, ident_map: dict[str, str],
+                    name_map: dict[str, str], namespaces: set[str]) -> list[str]:
+    """All SQL tables referenced in a code or sql`` snippet (deduped, ordered)."""
     tables: list[str] = []
     seen: set[str] = set()
 
-    def _add(js: str) -> None:
-        t = name_map.get(js, js)
-        if t not in seen:
+    def _add(t: str) -> None:
+        if t and t not in seen:
             seen.add(t)
             tables.append(t)
 
-    for m in _RE_FROM_SCHEMA.finditer(handler_body):
-        _add(m.group(1))
-    for m in _RE_TABLE_WRITE.finditer(handler_body):
-        _add(m.group(1))
-    for m in _RE_DB_QUERY.finditer(handler_body):
-        _add(m.group(1))
-    for m in _RE_SQL_TICK.finditer(handler_body):
-        for sm in _RE_SCHEMA_ACCESS.finditer(m.group(1)):
-            _add(sm.group(1))
+    for m in _RE_FROM.finditer(text):
+        _add(_resolve_arg(m.group(1), ident_map, name_map, namespaces))
+    for m in _RE_WRITE.finditer(text):
+        _add(_resolve_arg(m.group(1), ident_map, name_map, namespaces))
+    for m in _RE_DB_QUERY.finditer(text):
+        _add(name_map.get(m.group(1), m.group(1)))
+    for m in _RE_ACCESS.finditer(text):
+        if m.group(1):  # 3-part NS.TABLE.COL -> table is the 2nd component
+            if m.group(1) in namespaces:
+                _add(name_map.get(m.group(2), m.group(2)))
+        else:  # 2-part TABLE.COL -> table is the 1st component
+            t = m.group(4)
+            if t in ident_map:
+                _add(name_map.get(ident_map[t], ident_map[t]))
+            elif t in name_map:
+                _add(name_map[t])
     return tables
 
 
@@ -178,49 +259,104 @@ def _enclosing(
     return "<module>"
 
 
+def _last_arg(args_text: str) -> str:
+    """Last top-level comma-separated argument of a call's argument list."""
+    depth = 0
+    last_comma = -1
+    in_s = in_d = False
+    for i, ch in enumerate(args_text):
+        if in_s:
+            in_s = ch != "'"
+        elif in_d:
+            in_d = ch != '"'
+        elif ch == "'":
+            in_s = True
+        elif ch == '"':
+            in_d = True
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            last_comma = i
+    return args_text[last_comma + 1:].strip()
+
+
 def _collect_rest(
     src: str, rel: str, name_map: dict[str, str], facts: CodeFacts
 ) -> None:
     """Pass 2: endpoints, attr accesses, raw_sql, calls."""
     fn_spans = _named_functions(src)
+    ident_map, namespaces = _parse_imports(src, name_map)
     # route_spans: (route_id, brace_open, brace_close)
     route_spans: list[tuple[str, int, int]] = []
     for m in _RE_ROUTE.finditer(src):
         method, path = m.group("method"), m.group("path")
         line = _line_of(src, m.start())
         rid = f"route_{line}"
-        brace_open = src.find("{", m.end())
-        close = _balance(src, brace_open) if brace_open != -1 else -1
-        route_spans.append((rid, brace_open, close))
+        # Resolve the route handler: the last argument of the route call.
+        paren_open = src.find("(", m.start())
+        paren_close = _balance(src, paren_open, "(", ")") if paren_open != -1 else -1
+        handler = ""
+        if paren_close > 0:
+            handler = _last_arg(src[m.end():paren_close])
+        if re.fullmatch(r"\w+", handler) and handler in fn_spans:
+            # named handler — reuse its body and link via a call edge
+            o, c = fn_spans[handler]
+            route_spans.append((rid, o, c))
+            facts.calls.append(FunctionCall(
+                caller=rid, callee=handler, file=rel, line=line,
+            ))
+        else:
+            # inline callback (arrow / block) — find its first '{' and balance
+            brace_open = src.find("{", m.end())
+            close = _balance(src, brace_open) if brace_open != -1 else -1
+            route_spans.append((rid, brace_open, close))
         facts.endpoints.append(EndpointFact(
             path=path, method=method, file=rel, line=line, function=rid,
         ))
 
     # attr accesses
-    for m in _RE_SCHEMA_ACCESS.finditer(src):
-        facts.attr_accesses.append(AttrAccess(
-            model=m.group(1), column=m.group(2), file=rel,
-            line=_line_of(src, m.start()),
-            function=_enclosing(fn_spans, route_spans, m.start()),
-        ))
+    for m in _RE_ACCESS.finditer(src):
+        if m.group(1):  # 3-part NS.TABLE.COL
+            ns, tbl, col = m.group(1), m.group(2), m.group(3)
+            if ns in namespaces:
+                facts.attr_accesses.append(AttrAccess(
+                    model=name_map.get(tbl, tbl), column=col, file=rel,
+                    line=_line_of(src, m.start()),
+                    function=_enclosing(fn_spans, route_spans, m.start()),
+                ))
+        else:  # 2-part TABLE.COL
+            t, col = m.group(4), m.group(5)
+            if t in ident_map:
+                model = name_map.get(ident_map[t], ident_map[t])
+            elif t in name_map:
+                model = name_map[t]
+            else:
+                continue
+            facts.attr_accesses.append(AttrAccess(
+                model=model, column=col, file=rel,
+                line=_line_of(src, m.start()),
+                function=_enclosing(fn_spans, route_spans, m.start()),
+            ))
 
     # raw-sql / table refs
     def _rawref(m: re.Match, tables: list[str]) -> None:
+        if not tables:
+            return
         facts.raw_sql.append(RawSqlRef(
             tables=tables, file=rel, line=_line_of(src, m.start()),
             function=_enclosing(fn_spans, route_spans, m.start()),
         ))
 
-    for m in _RE_FROM_SCHEMA.finditer(src):
-        _rawref(m, [name_map.get(m.group(1), m.group(1))])
-    for m in _RE_TABLE_WRITE.finditer(src):
-        _rawref(m, [name_map.get(m.group(1), m.group(1))])
+    for m in _RE_FROM.finditer(src):
+        _rawref(m, [_resolve_arg(m.group(1), ident_map, name_map, namespaces)])
+    for m in _RE_WRITE.finditer(src):
+        _rawref(m, [_resolve_arg(m.group(1), ident_map, name_map, namespaces)])
     for m in _RE_DB_QUERY.finditer(src):
         _rawref(m, [name_map.get(m.group(1), m.group(1))])
     for m in _RE_SQL_TICK.finditer(src):
-        tables = _resolve_tables(m.group(1), name_map)
-        if tables:
-            _rawref(m, tables)
+        _rawref(m, _tables_in_text(m.group(1), ident_map, name_map, namespaces))
 
     # calls: named foo(...) inside each named fn / route handler -> caller=callee
     all_spans: list[tuple[str, int, int]] = [(n, o, c) for n, (o, c) in fn_spans.items()]

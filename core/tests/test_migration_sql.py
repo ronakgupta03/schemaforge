@@ -72,8 +72,8 @@ def test_analyze_locks_flags_alter(tmp_path):
     assert len(reports) == 1
     r = reports[0]
     assert r.lock == "AccessExclusive"
-    assert r.rewrites is True
-    assert r.risk == "dangerous"
+    assert r.rewrites is False  # PG11+ DROP COLUMN is metadata-only, no rewrite
+    assert r.risk == "brief-lock"
     assert r.alternative  # non-empty online alternative
 
 
@@ -82,3 +82,31 @@ def test_analyze_locks_create_is_safe(tmp_path):
     reports = analyze_locks_sql(p)
     assert reports[0].lock == "none"
     assert reports[0].risk == "safe"
+
+
+def test_analyze_locks_create_index_is_concurrent_candidate(tmp_path):
+    # CREATE INDEX is not lock-free: it takes a Share lock; the safe form is
+    # CREATE INDEX CONCURRENTLY (run outside execute_migration's transaction).
+    p = _write(tmp_path, "CREATE INDEX idx_users_email ON users (email);\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.lock == "Share"
+    assert r.risk == "brief-lock"
+    assert "CONCURRENTLY" in r.alternative
+
+
+def test_analyze_locks_insert_select_backfill_is_heavy(tmp_path):
+    # A large INSERT...SELECT backfill is not safe: it holds a Share lock on
+    # the source table for the duration of the scan.
+    p = _write(tmp_path, "INSERT INTO user_profiles (user_id) SELECT id FROM users;\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.lock == "Share"
+    assert r.risk == "dangerous"
+    assert r.alternative
+
+
+def test_block_comment_does_not_merge_tokens(tmp_path):
+    # A comment between CREATE and TABLE must not collapse to "CREATETABLE",
+    # which _sql_kind would reject as unclassified.
+    p = _write(tmp_path, "CREATE/* note */TABLE t (id int);\n")
+    cls = classify_sql(p)
+    assert cls.expand and not cls.has_unclassified

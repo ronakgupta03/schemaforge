@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -163,18 +164,74 @@ def _test_dsn(dsn: str) -> str:
     return urlunsplit((p.scheme, p.netloc, "/".join(path), p.query, p.fragment))
 
 
-def _apply_sql_migrations(dir_: Path, args: argparse.Namespace, env: dict) -> tuple[bool, str]:
-    """Apply raw-SQL migrations in lexicographic order (or a single --migration)."""
+def _apply_sql_migrations(
+    dir_: Path, args: argparse.Namespace, env: dict
+) -> tuple[bool, str]:
+    """Apply raw-SQL migrations as a single transaction, stopping on the first
+    failure (ON_ERROR_STOP + --single-transaction rolls the whole batch back).
+
+    Statements using ``CREATE INDEX CONCURRENTLY`` cannot run inside a
+    transaction; they are separated and applied individually (each its own
+    psql call) after the transactional batch, and reported.
+
+    Discovery matches tool detection (recursive over ``migrations/`` and
+    ``drizzle/``, or a single ``--migration``), so nested/drizzle migrations
+    are applied rather than silently skipped.
+    """
+    import tempfile
+
+    from .detect import sql_migration_files
+    from .migration_sql import _split_sql_statements
+
     if getattr(args, "migration", None):
-        sqls = [Path(args.migration)]
+        files = [Path(args.migration)]
     else:
-        mdir = dir_ / "migrations"
-        sqls = sorted(mdir.glob("*.sql")) if mdir.is_dir() else []
+        files = sql_migration_files(dir_)
+    if not files:
+        raise SystemExit(
+            "verify: no SQL migrations found under migrations/ or drizzle/; "
+            "pass --migration <file> or create migrations/*.sql"
+        )
+
+    batch = "\n".join(f.read_text(encoding="utf-8") for f in files)
+    txn_stmts: list[str] = []
+    conc_stmts: list[str] = []
+    for _lineno, stmt in _split_sql_statements(batch):
+        if re.search(r"\bconcurrently\b", stmt, re.I):
+            conc_stmts.append(stmt)
+        else:
+            txn_stmts.append(stmt)
+
     ok, out = True, ""
-    for sf in sqls:
-        r = _run(["psql", "-v", "ON_ERROR_STOP=1", "-f", str(sf), args.dsn], dir_, env)
+    if txn_stmts:
+        joined = ";\n".join(txn_stmts) + ";\n"
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".sql", delete=False, dir=str(dir_)
+        ) as tf:
+            tf.write(joined)
+            batch_path = tf.name
+        try:
+            r = _run(
+                ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction",
+                 "-f", batch_path, args.dsn],
+                dir_, env,
+            )
+            ok = r.returncode == 0
+            out += (r.stdout + r.stderr)[-2000:]
+        finally:
+            Path(batch_path).unlink(missing_ok=True)
+
+    for stmt in conc_stmts:
+        r = _run(
+            ["psql", "-v", "ON_ERROR_STOP=1", "-c", stmt, args.dsn], dir_, env
+        )
         ok = ok and r.returncode == 0
-        out += (r.stdout + r.stderr)[-2000:]
+        out += (r.stdout + r.stderr)[-1000:]
+    if conc_stmts:
+        out += (
+            f"\n[applied {len(conc_stmts)} CONCURRENTLY statement(s) outside the "
+            f"transaction]\n"
+        )
     return ok, out
 
 
@@ -195,14 +252,23 @@ def _run_ts_tests(dir_: Path, env: dict) -> tuple[bool, str]:
 
 def cmd_verify(args: argparse.Namespace) -> None:
     env = {**os.environ, "DATABASE_URL": args.dsn}
-    # The app's tests force a separate test database; derive it from the DSN
-    # so the sandbox flow needs no extra env (conftest's :5434 default only
-    # matches the local host setup).
-    env.setdefault("TEST_DATABASE_URL", _test_dsn(args.dsn))
     dir_ = Path(args.dir)
-
     tool = args.tool if args.tool != "auto" else detect_migration_tool(str(dir_))
-
+    if tool == "none":
+        print(
+            "verify: no recognized migration tool (alembic.ini or *.sql under "
+            "migrations/drizzle/) — cannot apply or verify the migration",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    # Tests must run against the same DB the migration was applied to.
+    # The Python/alembic conftest manages its own separate test DB ('_test'
+    # suffix); the SQL/TS path applies migrations to args.dsn and must test
+    # there too, so force TEST_DATABASE_URL = args.dsn.
+    if tool == "sql":
+        env["TEST_DATABASE_URL"] = args.dsn
+    else:
+        env.setdefault("TEST_DATABASE_URL", _test_dsn(args.dsn))
     # --- apply the migration ---
     if tool == "sql":
         apply_ok, apply_out = _apply_sql_migrations(dir_, args, env)

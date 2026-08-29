@@ -64,6 +64,10 @@ def _sql_kind(sql: str) -> tuple[str, str]:
     s = sql.strip()
     if re.match(r"UPDATE\s+alembic_version\b", s, re.I):
         return "neutral", "alembic version stamping"
+    if re.match(r"UPDATE\b", s, re.I):
+        # A data backfill UPDATE is additive work belonging to the expand
+        # phase (it mutates rows, not schema). Lock analysis flags it heavy.
+        return "expand", "UPDATE (data backfill)"
     if re.match(r"INSERT\s+INTO\b.*?\bSELECT\b", s, re.I | re.DOTALL):
         # A guarded INSERT..SELECT (WHERE NOT EXISTS) is a reconciliation —
         # idempotent backfill of stragglers before the contract drops. It is
