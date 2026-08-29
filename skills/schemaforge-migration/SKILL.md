@@ -238,8 +238,13 @@ THEN the `drop_*` / `alter_column` cleanup. Then:
 ```bash
 sf-pipeline validate-phase --migration <contract file> --phase contract
 ```
-Must exit 0. Verify in the sandbox: apply the contract migration, run the
-final tests, parity against the new shape, EXPLAIN before/after.
+Must exit 0. Before applying the contract migration in the sandbox, capture
+the current revision with `alembic current` (the expand head, e.g. `0002a`)
+and store it as `<expand-head>` — step 21's production offline SQL renders
+from THIS revision, not the post-apply current (which would be the contract
+head and render an empty range). Then verify in the sandbox: apply the
+contract migration, run the final tests, parity against the new shape,
+EXPLAIN before/after.
 
 ### 18. Delivery — the contract PR; END THE TURN
 Push the final app + contract migration to branch
@@ -263,9 +268,11 @@ Present the contract safety report + the `SAFE` gate verdict and call
 `ask_user_question` — Approve / Deny.
 
 ### 21. On approval — production apply (contract)
-`alembic upgrade <current>:head --sql > /workspace/out/contract.sql`, then
-`postgres-prod.execute_migration(<that SQL>)` (phase defaults to full —
-contract contains the drops). Verify `table_schema` + `row_count`.
+`alembic upgrade <expand-head>:head --sql > /workspace/out/contract.sql` (the
+`<expand-head>` captured in step 17 — NOT the post-apply current, which would
+render an empty range), then `postgres-prod.execute_migration(<that SQL>)`
+(phase defaults to full — contract contains the drops). Verify `table_schema`
++ `row_count`.
 
 ## Output contract
 - End every phase with one status line + artifact paths.

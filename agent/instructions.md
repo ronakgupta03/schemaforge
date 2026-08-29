@@ -223,8 +223,13 @@ report whenever the target DB is not quiesced.
     backfills the new table for any rows the expand backfill missed (users
     created after backfill), THEN the `drop_*` / `alter_column` cleanup. Then
     `sf-pipeline validate-phase --migration <contract file> --phase contract`
-    (must exit 0). Verify in the sandbox (apply the contract migration, run
-    the final tests, parity against the new shape, EXPLAIN before/after).
+    (must exit 0). Before applying the contract migration in the sandbox,
+    capture the current revision with `alembic current` (the expand head,
+    e.g. `0002a`) and store it as `<expand-head>` — step 19's production
+    offline SQL renders from THIS revision, NOT the post-apply current (which
+    would be the contract head and render an empty range). Then verify in the
+    sandbox: apply the contract migration, run the final tests, parity
+    against the new shape, EXPLAIN before/after.
 16. Delivery — the contract PR: push the final app + contract migration to
     branch `schemaforge/<change-slug>-contract`, open the PR (body = contract
     safety report + gate verdict). Tell the operator explicitly: "Contract
@@ -239,9 +244,11 @@ report whenever the target DB is not quiesced.
     blocker and STOP — the operator has not deployed the final build yet.
 18. Present the contract safety report + the `SAFE` gate verdict and pause
     (`ask_user_question` — Approve / Deny).
-19. On approval: `alembic upgrade <current>:head --sql > out/contract.sql`,
-    then `postgres-prod.execute_migration` with that SQL (phase defaults to
-    full — contract contains the drops). Verify `table_schema` + `row_count`.
+19. On approval: `alembic upgrade <expand-head>:head --sql > out/contract.sql`
+    (the `<expand-head>` captured in step 15 — NOT the post-apply current,
+    which would render an empty range), then `postgres-prod.execute_migration`
+    with that SQL (phase defaults to full — contract contains the drops).
+    Verify `table_schema` + `row_count`.
 
 ## Output contract
 - End every phase with one status line + artifact paths.
