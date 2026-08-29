@@ -904,6 +904,30 @@ git commit -m "feat(core): analyze-locks — DDL lock impact + online alternativ
 
 ---
 
+> **DONE — Tasks 1-3 (PR #29, merged `8d9c908`, Qodo clean 0 findings).**
+> Implemented in one PR via a delegated subagent (verbatim plan code + test-driven fixes),
+> then verified independently. Core engine: `migration.py` (`classify`/`validate_phase`/
+> `analyze_locks`), `impact_graph.impacted_by_columns`, three `sf-pipeline` subcommands
+> (`validate-phase`, `contract-gate`, `analyze-locks`), `__init__` exports.
+>
+> - **Tests:** `test_migration.py` (8) + `test_contract_gate.py` (3); full core suite
+>   **36 passed, 0 failed** (no regression). CLI `--help` verified for all 3 subcommands.
+> - **Integration smoke:** `classify` + `analyze_locks` on the golden
+>   `reference/post-split/.../0002_split_users.py` → expand 2 (create_table +
+>   INSERT..SELECT backfill), contract 2 (drop_column ×2), 0 unclassified; locks:
+>   backfill→dangerous/Share, drop_column→brief-lock/AccessExclusive, create_table→safe/none.
+> - **Plan-code fixes (tests are the contract):**
+>   1. `impacted_by_columns` uses **directed** column→model/attr/endpoint reachability;
+>      the plan's bidirectional BFS leaked `column→table→model` via `maps_to` and falsely
+>      blocked a column no code reads (`test_contract_gate_safe_when_no_code_reads_column`).
+>   2. `LockReport.reason` added — plan test asserts `r.reason` but plan dataclass lacked it.
+>   3. `_sql_kind` INSERT..SELECT regex tolerates a column list (`INSERT INTO t (...) SELECT`).
+>   4. `ColumnInfo` accepts both `type=` and `data_type=` (plan fixtures use `type=`; `type` is
+>      an `InitVar`, does not leak into `asdict`).
+> - **Stage gate:** core engine (Tasks 1-3) complete; awaiting approval to start the
+>   integration phase (Tasks 4-8: execute_migration guard, two-phase agent + skill, reference
+>   phased migrations, E2E verify, README).
+
 ### Task 4: `execute_migration(sql, phase)` — mechanical expand-phase guard
 
 **Files:**
