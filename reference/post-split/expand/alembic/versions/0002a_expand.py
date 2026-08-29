@@ -50,3 +50,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("user_profiles")
+    # Restore the original NOT NULL contract. Fails loudly if any row has a
+    # NULL address (e.g. a user created by the final app during the expand
+    # window), which is correct — such a rollback is unsafe to complete.
+    op.alter_column("users", "address", nullable=False)
