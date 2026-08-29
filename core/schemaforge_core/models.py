@@ -5,16 +5,20 @@ pass everything between stages as JSON (and the LLM can read it).
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import InitVar, asdict, dataclass, field
 
 
 @dataclass
 class ColumnInfo:
     name: str
-    data_type: str
-    nullable: bool
+    data_type: str = ""
+    nullable: bool = True
     default: str | None = None
+    type: InitVar[str | None] = None
 
+    def __post_init__(self, type: str | None = None) -> None:
+        if type is not None and not self.data_type:
+            self.data_type = type
 
 @dataclass
 class IndexInfo:
