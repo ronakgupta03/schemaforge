@@ -133,6 +133,76 @@ def impacted_by(g: ImpactGraph, tables: list[str]) -> dict:
     }
 
 
+def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
+    """Reverse reachability from column nodes — the contract gate.
+
+    `columns` are "table.column" names. A column is SAFE to drop iff this
+    returns no code sites. Code sites are model/attr/rawsql/endpoint nodes
+    (NOT the column/table/schema nodes themselves, which are structural).
+    """
+    code_nodes: set[str] = set()
+
+    # Map which models map to which tables
+    model_to_table: dict[str, str] = {}
+    for e in g.edges:
+        if e.kind == "maps_to":
+            model_to_table[e.src] = e.dst
+
+    for c in columns:
+        if "." in c:
+            t_name, col_name = c.split(".", 1)
+        else:
+            t_name, col_name = "", c
+        cid = f"col_{_mid(t_name)}_{_mid(col_name)}" if t_name else ""
+        tid = f"table_{_mid(t_name)}" if t_name else ""
+
+        # 1. Models defining this column
+        for e in g.edges:
+            if e.kind == "defines_column" and (e.dst == cid or not cid and e.dst.endswith(f"_{_mid(col_name)}")):
+                code_nodes.add(e.src)
+
+        # 2. Attr accesses on this column
+        for nid, node in g.nodes.items():
+            if node.kind == "attr":
+                parts = node.label.split(".", 1)
+                if len(parts) == 2 and parts[1] == col_name:
+                    mid = f"model_{_mid(parts[0])}"
+                    if not tid or model_to_table.get(mid) == tid:
+                        code_nodes.add(nid)
+
+    # 3. Transitive closures: endpoints executing attr or rawsql (reverse: dst -> src)
+    rev: dict[str, list[str]] = defaultdict(list)
+    for e in g.edges:
+        if e.kind in ("executes",):
+            rev[e.dst].append(e.src)
+
+    seen: set[str] = set()
+    stack = list(code_nodes)
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        for neighbor in rev.get(n, []):
+            if neighbor in g.nodes and g.nodes[neighbor].kind in {"model", "attr", "rawsql", "endpoint"}:
+                stack.append(neighbor)
+
+    code_kinds = {"model", "attr", "rawsql", "endpoint"}
+    blockers: list[dict] = []
+    files: set[str] = set()
+    for nid in seen:
+        node = g.nodes[nid]
+        if node.kind in code_kinds:
+            blockers.append({"kind": node.kind, "label": node.label, "file": node.file})
+            if node.file:
+                files.add(node.file)
+    blockers.sort(key=lambda b: (b.get("file") or "", b["label"]))
+    return {
+        "safe": not blockers,
+        "columns": columns,
+        "blockers": blockers,
+        "files": sorted(files),
+    }
 def to_mermaid(g: ImpactGraph) -> str:
     lines = ["flowchart LR"]
     by_kind: dict[str, list[ImpactNode]] = defaultdict(list)

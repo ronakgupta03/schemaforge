@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .code_facts import collect_facts
 from .db_snapshot import connect, diff_tables, snapshot
-from .impact_graph import build, impacted_by, to_mermaid
+from .impact_graph import build, impacted_by, impacted_by_columns, to_mermaid
 from .models import CodeFacts, DBSnapshot
 from .report import render_json, render_report
 
@@ -71,6 +71,50 @@ def cmd_impact(args: argparse.Namespace) -> None:
         out.write_text(text)
     print(text)
 
+
+
+def cmd_validate_phase(args: argparse.Namespace) -> None:
+    from .migration import validate_phase
+    try:
+        validate_phase(args.migration, args.phase)
+        print(f"validate-phase -> OK ({args.phase}-pure)")
+    except ValueError as exc:
+        print(f"validate-phase -> FAIL: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def cmd_contract_gate(args: argparse.Namespace) -> None:
+    g = _load_graph(args.db, args.code)
+    columns = [c.strip() for c in args.columns.split(",") if c.strip()]
+    result = impacted_by_columns(g, columns)
+    text = json.dumps(result, indent=2)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text)
+    verdict = "SAFE" if result["safe"] else "BLOCKED"
+    print(f"contract-gate -> {verdict} ({len(result['blockers'])} blocker(s))")
+    if not result["safe"]:
+        for b in result["blockers"]:
+            print(f"  [{b['kind']}] {b['file']}:{b['label']}")
+
+
+def cmd_analyze_locks(args: argparse.Namespace) -> None:
+    from .migration import analyze_locks
+    reports = analyze_locks(args.migration)
+    data = [{"statement": r.statement, "line": r.lineno, "lock": r.lock,
+             "rewrites": r.rewrites, "risk": r.risk, "alternative": r.alternative}
+            for r in reports]
+    text = json.dumps(data, indent=2)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text)
+    for r in reports:
+        flag = "!" if r.risk == "dangerous" else ("." if r.risk == "brief-lock" else " ")
+        print(f"{flag} L{r.lineno} [{r.lock}] {r.risk}: {r.statement[:70]}")
+        if r.alternative:
+            print(f"      -> {r.alternative}")
 
 def _load_graph(db_path: str, code_path: str):
     snap = DBSnapshot.from_dict(json.loads(Path(db_path).read_text()))
@@ -228,6 +272,23 @@ def main() -> None:
     s.add_argument("--tables", required=True, help="comma-separated table names")
     s.add_argument("--out")
     s.set_defaults(fn=cmd_impact)
+
+    s = sub.add_parser("validate-phase")
+    s.add_argument("--migration", required=True)
+    s.add_argument("--phase", required=True, choices=["expand", "contract"])
+    s.set_defaults(fn=cmd_validate_phase)
+
+    s = sub.add_parser("contract-gate")
+    s.add_argument("--db", required=True)
+    s.add_argument("--code", required=True)
+    s.add_argument("--columns", required=True, help="comma-separated table.column names")
+    s.add_argument("--out")
+    s.set_defaults(fn=cmd_contract_gate)
+
+    s = sub.add_parser("analyze-locks")
+    s.add_argument("--migration", required=True)
+    s.add_argument("--out")
+    s.set_defaults(fn=cmd_analyze_locks)
 
     s = sub.add_parser("verify")
     s.add_argument("--dir", required=True)
