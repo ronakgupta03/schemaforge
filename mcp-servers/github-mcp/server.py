@@ -309,13 +309,16 @@ class ConfigHandler(BaseHTTPRequestHandler):
         default_repo = body.get("default_repo")
         if not token and not default_repo:
             return self._send(400, {"error": "at least one of 'token' or 'default_repo' is required"})
+        # Validate the complete payload BEFORE mutating any state, so a
+        # rejected request cannot partially apply (e.g. change the token
+        # while rejecting the repo).
+        if token and (not isinstance(token, str) or not token.startswith(("ghp_", "github_pat_", "gho_", "ghu_"))):
+            return self._send(400, {"error": "token must start with ghp_, github_pat_, gho_, or ghu_"})
+        if default_repo and (not isinstance(default_repo, str) or not _normalize_repo(default_repo)):
+            return self._send(400, {"error": "default_repo must be `owner/name` or a GitHub URL like https://github.com/owner/name"})
         if token:
-            if not isinstance(token, str) or not token.startswith(("ghp_", "github_pat_", "gho_", "ghu_")):
-                return self._send(400, {"error": "token must start with ghp_, github_pat_, gho_, or ghu_"})
             _config["token"] = token
         if default_repo:
-            if not isinstance(default_repo, str) or not _normalize_repo(default_repo):
-                return self._send(400, {"error": "default_repo must be `owner/name` or a GitHub URL like https://github.com/owner/name"})
             _config["default_repo"] = default_repo
         _save_config()
         return self._send(202, {"data": {"ok": True, "configured": bool(_config.get("token"))}})
