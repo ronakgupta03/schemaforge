@@ -57,24 +57,26 @@ PR), or artifact-only (no GitHub at all). If the request is ambiguous, ask
 via `ask_user_question` at the approval pause.
 
 ### 1. Sandbox bootstrap (once per session)
-Clone the USER's repo (not the engine) into the sandbox:
-```bash
-git clone --depth 1 ${GITHUB_REPO_URL} /workspace/app || test -d /workspace/app/.git
-cd /workspace/app
-```
-If the clone fails with permission denied on `/workspace`, run
-`sudo chown -R daytona:daytona /workspace` first, then re-clone.
+The sandbox starts empty. Determine the target repo, then bootstrap an in-sandbox
+Postgres + tooling in ONE call:
 
-Provision the app in the sandbox: create/activate a venv, install the app's
-dependencies (discover `requirements.txt` / `pyproject.toml` / `Pipfile`),
-install `schemaforge_core` (the deterministic engine) into the same venv,
-start the sandbox Postgres, create the app's database, and bring it to its
-baseline (e.g. `alembic upgrade head` if the app uses Alembic — else the
-app's own migration/DDL). The sandbox DB mirrors production's pre-change
-state: if the app ships seed data, load it so EXPLAIN ANALYZE is meaningful.
+1. Resolve the target repo URL:
+   - If `GITHUB_REPO_URL` is set in the sandbox environment, use it.
+   - Else if the `github` MCP is attached, call `get_repo('')` (empty repo resolves
+     to the configured default repo) and use its `clone_url`.
+   - Else ask the operator for the GitHub URL of the app you are migrating.
+   Do NOT assume any specific repo.
+2. Run the generic bootstrap (it ships with this skill), passing the resolved URL:
+   `GITHUB_REPO_URL=<url> bash /opt/tfy/skills/schemaforge-migration/sandbox_setup.sh`
+   It chowns `/workspace` if needed, starts an in-sandbox Postgres, clones the target
+   into `/workspace/app`, installs the app's deps + the SchemaForge core, runs the
+   app's migrations (alembic/django auto-detected), and seeds if the repo declares
+   `SANDBOX_SEED_CMD` in `.sf-sandbox.env`.
+3. Source the activation script in every later shell: `. $HOME/.sfenv-activate.sh`.
+   This sets `DATABASE_URL` (in-sandbox), `TEST_DATABASE_URL`, and `APP_DIR`.
 
-In every later shell, source the venv activation so `python`/`alembic`/
-`pytest`/`sf-pipeline` resolve to it.
+All analysis runs against `$APP_DIR` (the target app) and the in-sandbox DB.
+Production/cloud DB access is ONLY via the host-side `postgres-prod` MCP tools.
 
 ### 2. DB facts
 Subagent `db-analysis` or directly: postgres-prod MCP `list_tables` +

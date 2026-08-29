@@ -2,11 +2,11 @@
 
 Commands:
   snapshot  --dsn URL --out out/db.json
-  facts     --app demo-app --out out/code.json
+  facts     --app <app-dir> --out out/code.json
   graph     --db out/db.json --code out/code.json --out out/graph.json --mermaid out/graph.mmd
-  verify    --dir demo-app --dsn URL --baseline out/db_before.json
-            [--parity-sql reference/post-split/parity.sql]
-            [--queries demo-app/queries/bench.sql]
+  verify    --dir <app-dir> --dsn URL --baseline out/db_before.json
+            [--parity-sql <parity.sql>]
+            [--queries <queries.sql>]
             [--explain-before out/explain_before.json]
             --out out/report.md
 """
@@ -94,10 +94,10 @@ def _tool(name: str) -> str:
 
 
 def _test_dsn(dsn: str) -> str:
-    """Append '_test' to the database name: .../bookstore -> .../bookstore_test.
+    """Append '_test' to the database name: .../appdb -> .../appdb_test.
 
-    Query/fragment suffixes survive: .../bookstore?application_name=verify
-    -> .../bookstore_test?application_name=verify.
+    Query/fragment suffixes survive: .../appdb?application_name=verify
+    -> .../appdb_test?application_name=verify.
     """
     p = urlsplit(dsn)
     path = p.path.rsplit("/", 1)

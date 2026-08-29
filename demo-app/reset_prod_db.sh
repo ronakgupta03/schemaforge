@@ -2,14 +2,14 @@
 # Reset the "production" bookstore DB to a clean pre-split state, then re-seed.
 #
 # Drops and recreates the database (wiping alembic_version + every table), then
-# runs scripts/seed_prod.sh to apply the 0001 baseline and seed 200,000 users /
+# runs the sibling seed_prod.sh to apply the 0001 baseline and seed 200,000 users /
 # 5,000 books. Use this before a demo take, or whenever `alembic upgrade head`
 # fails with "Can't locate revision identified by '<n>'" because the DB is still
 # stamped at a migration that was reverted out of demo-app/alembic/versions.
 #
-# Usage:
-#   bash scripts/reset_prod_db.sh
-#   DATABASE_URL=postgresql://user:pass@host:5433/bookstore bash scripts/reset_prod_db.sh
+# Usage (run from the repo root):
+#   bash demo-app/reset_prod_db.sh
+#   DATABASE_URL=postgresql://user:pass@host:5433/bookstore bash demo-app/reset_prod_db.sh
 #
 # Safe to re-run: it terminates live connections to the target DB first, so the
 # postgres-mcp server (and any open sandbox) simply reconnect on demand.
@@ -47,4 +47,4 @@ print(f"  dropped + recreated '{dbname}' (connected via '/postgres')")
 PY
 
 echo "re-seeding (0001 baseline + data) ..."
-exec bash scripts/seed_prod.sh
+exec bash "$(dirname "$0")/seed_prod.sh"

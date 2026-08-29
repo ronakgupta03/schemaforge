@@ -64,9 +64,9 @@ restart. Qodo reviewed every PR — evidence in the README."
 
 1. **Reset prod before the take** (pre-split baseline):
    ```bash
-   docker compose -f scripts/prod-postgres/docker-compose.yml down -v
-   docker compose -f scripts/prod-postgres/docker-compose.yml up -d
-   bash scripts/seed_prod.sh          # alembic 0001 + 200k users / 5k books
+   docker compose -f demo-app/prod-postgres/docker-compose.yml down -v
+   docker compose -f demo-app/prod-postgres/docker-compose.yml up -d
+   bash demo-app/seed_prod.sh          # alembic 0001 + 200k users / 5k books
    ```
 2. **Start the services**: `bash scripts/run_mcp_servers.sh` (postgres-mcp
    :8001, github-mcp :8002), TrueForge on `[::1]:8790`. Confirm agent
