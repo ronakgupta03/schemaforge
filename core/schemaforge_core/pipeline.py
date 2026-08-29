@@ -79,9 +79,14 @@ def cmd_impact(args: argparse.Namespace) -> None:
 
 
 def cmd_validate_phase(args: argparse.Namespace) -> None:
-    from .migration import validate_phase
+    if Path(args.migration).suffix == ".sql":
+        from .migration_sql import validate_phase_sql
+        validate_fn = validate_phase_sql
+    else:
+        from .migration import validate_phase
+        validate_fn = validate_phase
     try:
-        validate_phase(args.migration, args.phase)
+        validate_fn(args.migration, args.phase)
         print(f"validate-phase -> OK ({args.phase}-pure)")
     except ValueError as exc:
         print(f"validate-phase -> FAIL: {exc}", file=sys.stderr)
@@ -105,8 +110,12 @@ def cmd_contract_gate(args: argparse.Namespace) -> None:
 
 
 def cmd_analyze_locks(args: argparse.Namespace) -> None:
-    from .migration import analyze_locks
-    reports = analyze_locks(args.migration)
+    if Path(args.migration).suffix == ".sql":
+        from .migration_sql import analyze_locks_sql
+        reports = analyze_locks_sql(args.migration)
+    else:
+        from .migration import analyze_locks
+        reports = analyze_locks(args.migration)
     data = [{"statement": r.statement, "line": r.lineno, "lock": r.lock,
              "rewrites": r.rewrites, "risk": r.risk, "alternative": r.alternative}
             for r in reports]
