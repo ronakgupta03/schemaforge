@@ -83,6 +83,12 @@ instruction**: PR (default when the github MCP is attached), commit-only (no
 PR), or artifact-only (no GitHub at all). If the request is ambiguous, ask
 via `ask_user_question` at the approval pause.
 
+**Language.** The pipeline auto-detects Python/SQLAlchemy or
+TypeScript/Drizzle (`pgTable`/`sqliteTable`/`mysqlTable` + Hono/Express
+routes). For a TS app, migrations are plain SQL classified by SQL verb (no
+Alembic `op.*`); `validate-phase`/`analyze-locks`/`verify` route on the
+migration file extension (`.sql` vs `.py`).
+
 ### 1. Sandbox bootstrap (once per session)
 The sandbox starts empty and has NO git credentials, so it cannot `git clone`
 a private repo. Get the source via the host-side github MCP, then bootstrap

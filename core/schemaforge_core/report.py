@@ -5,12 +5,14 @@ import datetime as _dt
 
 
 def render_report(r: dict) -> str:
+    tool = r.get("tool", "alembic")
+    apply_label = "Alembic migration" if tool == "alembic" else "SQL migration apply"
     lines = ["# SchemaForge Safety Report", ""]
     lines.append(f"Generated: {_dt.datetime.now().isoformat(timespec='seconds')}")
     lines.append("")
     lines.append("## Verification")
-    lines.append(f"- Alembic migration: {'PASS' if r['alembic_ok'] else 'FAIL'}")
-    lines.append(f"- Application tests: {'PASS' if r['pytest_ok'] else 'FAIL'}")
+    lines.append(f"- {apply_label}: {'PASS' if r['apply_ok'] else 'FAIL'}")
+    lines.append(f"- Application tests: {'PASS' if r['test_ok'] else 'FAIL'}")
     if r.get("parity_ok") is not None:
         lines.append(f"- Data parity: {'PASS' if r['parity_ok'] else 'FAIL'}")
     lines.append("")
@@ -26,8 +28,12 @@ def render_report(r: dict) -> str:
         lines.append(f"- `{e['query']}`: before = {before}, after = {e['ms']} ms")
     lines.append("")
     lines.append("## Rollback")
-    lines.append("`alembic downgrade -1` restores the previous schema "
-                 "(the revision ships its own `downgrade()`).")
+    if tool == "alembic":
+        lines.append("`alembic downgrade -1` restores the previous schema "
+                     "(the revision ships its own `downgrade()`).")
+    else:
+        lines.append("Each SQL migration ships a paired `down`/revert script applied "
+                     "in reverse order to restore the previous schema.")
     lines.append("")
     lines.append("## Approval checklist")
     lines.append("- [ ] Impact graph reviewed")
@@ -41,8 +47,9 @@ def render_report(r: dict) -> str:
 def render_json(r: dict) -> dict:
     """Machine-readable subset of the safety report (consumed by the UI)."""
     return {
-        "alembic_ok": bool(r.get("alembic_ok")),
-        "pytest_ok": bool(r.get("pytest_ok")),
+        "tool": r.get("tool", "alembic"),
+        "apply_ok": bool(r.get("apply_ok")),
+        "test_ok": bool(r.get("test_ok")),
         "parity_ok": r.get("parity_ok"),  # None when no parity SQL was given
         "diff": r.get("diff", {}),
         "explain": r.get("explain", []),

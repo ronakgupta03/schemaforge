@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .code_facts import collect_facts
 from .code_facts_ts import collect_facts_ts
-from .detect import detect_language
+from .detect import detect_language, detect_migration_tool
 from .db_snapshot import connect, diff_tables, snapshot
 from .impact_graph import build, impacted_by, impacted_by_columns, to_mermaid
 from .models import CodeFacts, DBSnapshot
@@ -163,6 +163,36 @@ def _test_dsn(dsn: str) -> str:
     return urlunsplit((p.scheme, p.netloc, "/".join(path), p.query, p.fragment))
 
 
+def _apply_sql_migrations(dir_: Path, args: argparse.Namespace, env: dict) -> tuple[bool, str]:
+    """Apply raw-SQL migrations in lexicographic order (or a single --migration)."""
+    if getattr(args, "migration", None):
+        sqls = [Path(args.migration)]
+    else:
+        mdir = dir_ / "migrations"
+        sqls = sorted(mdir.glob("*.sql")) if mdir.is_dir() else []
+    ok, out = True, ""
+    for sf in sqls:
+        r = _run(["psql", "-v", "ON_ERROR_STOP=1", "-f", str(sf), args.dsn], dir_, env)
+        ok = ok and r.returncode == 0
+        out += (r.stdout + r.stderr)[-2000:]
+    return ok, out
+
+
+def _run_ts_tests(dir_: Path, env: dict) -> tuple[bool, str]:
+    """Run `npm test` if package.json defines a test script; else data parity is
+    the sole invariant (TypeScript apps have no pytest)."""
+    pkg = dir_ / "package.json"
+    if pkg.exists():
+        try:
+            scripts = json.loads(pkg.read_text()).get("scripts", {})
+        except (OSError, ValueError):
+            scripts = {}
+        if scripts.get("test"):
+            r = _run(["npm", "test", "--silent"], dir_, env)
+            return r.returncode == 0, (r.stdout + r.stderr)[-3000:]
+    return True, "(no test script; data parity is the sole invariant)"
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
     env = {**os.environ, "DATABASE_URL": args.dsn}
     # The app's tests force a separate test database; derive it from the DSN
@@ -171,8 +201,17 @@ def cmd_verify(args: argparse.Namespace) -> None:
     env.setdefault("TEST_DATABASE_URL", _test_dsn(args.dsn))
     dir_ = Path(args.dir)
 
-    alembic = _run([_tool("alembic"), "upgrade", "head"], dir_, env)
+    tool = args.tool if args.tool != "auto" else detect_migration_tool(str(dir_))
 
+    # --- apply the migration ---
+    if tool == "sql":
+        apply_ok, apply_out = _apply_sql_migrations(dir_, args, env)
+    else:  # alembic (default)
+        alembic = _run([_tool("alembic"), "upgrade", "head"], dir_, env)
+        apply_ok = alembic.returncode == 0
+        apply_out = (alembic.stdout + alembic.stderr)[-2000:]
+
+    # --- schema diff + data parity (language-agnostic) ---
     with connect(args.dsn) as conn:
         after = snapshot(conn)
         before = DBSnapshot.from_dict(json.loads(Path(args.baseline).read_text()))
@@ -190,8 +229,15 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 if isinstance(v, bool)
             )
 
-    pytest = _run([_tool("pytest"), "-q"], dir_, env)
+    # --- contract tests ---
+    if tool == "sql":
+        test_ok, test_out = _run_ts_tests(dir_, env)
+    else:
+        res = _run([_tool("pytest"), "-q"], dir_, env)
+        test_ok = res.returncode == 0
+        test_out = (res.stdout + res.stderr)[-3000:]
 
+    # --- query plans (language-agnostic) ---
     before_explain: dict[str, float] = {}
     if args.explain_before and Path(args.explain_before).exists():
         before_explain = json.loads(Path(args.explain_before).read_text())
@@ -206,10 +252,11 @@ def cmd_verify(args: argparse.Namespace) -> None:
         )
 
     result = {
-        "alembic_ok": alembic.returncode == 0,
-        "alembic_output": (alembic.stdout + alembic.stderr)[-2000:],
-        "pytest_ok": pytest.returncode == 0,
-        "pytest_output": (pytest.stdout + pytest.stderr)[-3000:],
+        "tool": "sql" if tool == "sql" else "alembic",
+        "apply_ok": apply_ok,
+        "apply_output": apply_out,
+        "test_ok": test_ok,
+        "test_output": test_out,
         "parity_ok": parity_ok,
         "parity_output": parity_out[-2000:],
         "diff": diff,
@@ -223,9 +270,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
         json.dumps(render_json(result), indent=2) + "\n"
     )
     print(report)
-    sys.exit(
-        0 if (result["alembic_ok"] and result["pytest_ok"] and parity_ok is not False) else 1
-    )
+    sys.exit(0 if (apply_ok and test_ok and parity_ok is not False) else 1)
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
@@ -313,6 +358,8 @@ def main() -> None:
     s.add_argument("--queries", required=True)
     s.add_argument("--explain-before")
     s.add_argument("--out", required=True)
+    s.add_argument("--tool", choices=["auto", "alembic", "sql"], default="auto")
+    s.add_argument("--migration", help="single SQL migration file (tool=sql)")
     s.set_defaults(fn=cmd_verify)
 
     s = sub.add_parser("bench")
