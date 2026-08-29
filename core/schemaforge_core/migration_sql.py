@@ -16,7 +16,8 @@ from .migration import LockReport, OpClass, PhaseClassification, _sql_kind
 # treated as volatile (forces a rewrite) — see ``_default_is_volatile``.
 _NONVOLATILE_DEFAULT_FNS = frozenset({
     "now", "current_timestamp", "transaction_timestamp",
-    "localtimestamp", "current_date", "current_time",
+    "statement_timestamp", "localtimestamp", "localtime",
+    "current_date", "current_time",
 })
 
 

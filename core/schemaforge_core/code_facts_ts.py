@@ -307,6 +307,9 @@ def _last_arg_start(args_text: str) -> int:
     n = len(args_text)
     while i < n:
         ch = args_text[i]
+        if (in_s or in_d) and ch == "\\":
+            i += 2          # skip escaped char inside a JS string
+            continue
         if in_s:
             if ch == "'":
                 in_s = False

@@ -124,3 +124,13 @@ def test_last_arg_start_ignores_template_literal_commas():
     inner = "'/x', c => sql`SELECT ${a.id}, literal`"
     start = _last_arg_start(inner)
     assert inner[start:].lstrip() == "c => sql`SELECT ${a.id}, literal`"
+
+
+def test_last_arg_start_handles_escaped_quotes_in_string():
+    from schemaforge_core.code_facts_ts import _last_arg_start
+    # an escaped quote (\"\") inside a double-quoted string must not terminate
+    # the string, so a comma inside it stays part of the same argument and the
+    # handler is not split before the schema access.
+    inner = "'/x', c => schema.users.id && \"a\\\",b\""
+    start = _last_arg_start(inner)
+    assert inner[start:].lstrip().startswith("c =>")

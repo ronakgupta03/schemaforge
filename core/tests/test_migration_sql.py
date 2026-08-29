@@ -189,3 +189,15 @@ def test_analyze_locks_stable_keyword_with_precision_is_brief(tmp_path):
     r = analyze_locks_sql(p)[0]
     assert r.risk == "brief-lock"
     assert r.rewrites is False
+
+
+def test_analyze_locks_stable_function_call_default_is_brief(tmp_path):
+    # STABLE function calls with empty parens (statement_timestamp(), localtime())
+    # are metadata-only fast defaults -- the function form resolves like the
+    # bare keyword, not a volatile rewrite.
+    for fn in ("statement_timestamp()", "localtime()"):
+        p = tmp_path / f"mig_{fn.replace('(', '_').replace(')', '')}.sql"
+        p.write_text(f"ALTER TABLE users ADD COLUMN x timestamptz DEFAULT {fn};\n")
+        r = analyze_locks_sql(p)[0]
+        assert r.risk == "brief-lock", fn
+        assert r.rewrites is False, fn
