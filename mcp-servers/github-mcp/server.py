@@ -80,6 +80,44 @@ def get_repo(repo: str = "") -> dict:
 
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
+def get_repo_archive(repo: str = "", ref: str = "") -> dict:
+    """Download the repo source tree as a gzipped tarball, base64-encoded.
+
+    Uses the configured GitHub token, so PRIVATE repos are accessible without
+    exposing credentials to the sandbox (the sandbox has no git creds and
+    cannot `git clone` a private repo). Returns {repo, ref, sha, format,
+    archive_base64}. Decode + extract, e.g.:
+        base64 -d <b64> | tar xzf - --strip-components=1 -C /workspace/app
+    For large repos, fetch via the sandbox `mcp-client` CLI and pipe straight
+    to a file so the blob never enters the model context.
+    """
+    repo = _resolve_repo(repo)
+    if not repo:
+        raise ValueError("no repo: pass repo or set default_repo via POST /config")
+    with _client() as c:
+        if not ref:
+            r = c.get(f"{API}/repos/{repo}")
+            r.raise_for_status()
+            ref = r.json()["default_branch"]
+        sha = ref
+        try:
+            rc = c.get(f"{API}/repos/{repo}/commits/{ref}")
+            rc.raise_for_status()
+            sha = rc.json()["sha"]
+        except Exception:
+            pass
+        a = c.get(f"{API}/repos/{repo}/tarball/{ref}", follow_redirects=True, timeout=300)
+        a.raise_for_status()
+        data = a.content
+    return {
+        "repo": repo,
+        "ref": ref,
+        "sha": sha,
+        "format": "tar.gz",
+        "archive_base64": base64.b64encode(data).decode("ascii"),
+    }
+
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
 def branch_exists(repo: str = "", branch: str = "") -> bool:
     """Whether a branch already exists."""
     repo = _resolve_repo(repo)

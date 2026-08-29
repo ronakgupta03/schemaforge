@@ -10,18 +10,31 @@ SF_TOOLING_REPO="${SF_TOOLING_REPO:-https://github.com/ronakgupta03/schemaforge}
 if [ "$(id -u)" != 0 ] && [ ! -w "$WORK" ]; then sudo chown -R "$(id -u):$(id -g)" "$WORK"; fi
 
 run_postgres() { if [ "$(id -u)" = 0 ]; then su postgres -c "$1"; else sudo -u postgres bash -lc "$1"; fi; }
+as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 
 # 1. Postgres (install if missing, start, wait for TCP)
 if ! command -v psql >/dev/null 2>&1 || [ ! -d /etc/postgresql ]; then
-  sudo apt-get update -qq && sudo apt-get install -y -qq postgresql postgresql-contrib
+  as_root apt-get update -qq && as_root apt-get install -y -qq postgresql postgresql-contrib
 fi
-sudo service postgresql start 2>/dev/null || sudo pg_ctlcluster main start 2>/dev/null || true
+as_root service postgresql start 2>/dev/null || as_root pg_ctlcluster main start 2>/dev/null || true
 for _ in $(seq 1 30); do pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1 && break; sleep 1; done
 pg_isready -h 127.0.0.1 -p 5432 || { echo "postgres not ready on 5432"; exit 1; }
 
-# 2. Clone the target repo into /workspace/app
-if [ -n "${GITHUB_REPO_URL:-}" ] && [ ! -d "$APP/.git" ]; then git clone --depth 1 "$GITHUB_REPO_URL" "$APP"; fi
-[ -d "$APP" ] || { echo "no app at $APP and GITHUB_REPO_URL unset"; exit 1; }
+# 2. Acquire the target repo source into /workspace/app.
+#    Private repos: the sandbox has no git credentials and cannot `git clone`;
+#    the agent must fetch a tarball via the host-side github MCP
+#    (`get_repo_archive`, which holds the token) and extract it here BEFORE
+#    running this script. Public repos: a plain `git clone` still works.
+if [ -d "$APP" ] && [ -n "$(ls -A "$APP" 2>/dev/null)" ]; then
+  : # app source already present (agent extracted it via get_repo_archive)
+elif [ -n "${GITHUB_REPO_URL:-}" ]; then
+  git clone --depth 1 "$GITHUB_REPO_URL" "$APP" || { echo "git clone failed (private repo? fetch via github get_repo_archive first)"; exit 1; }
+else
+  echo "no app at $APP: fetch the repo via github MCP get_repo_archive and extract to $APP before running this script"; exit 1
+fi
+# Local git baseline so `git diff` / `git add -N` work even for a tarball source
+# (no remote — never `git fetch` from the sandbox).
+{ [ -d "$APP/.git" ] || ( cd "$APP" && git init -q && git add -A && git commit -qm "baseline" ); } 2>/dev/null || true
 
 # 3. Source target profile(s), then auto-detect APP_DIR, then source APP_DIR profile
 [ -f "$APP/.sf-sandbox.env" ] && { set -a; . "$APP/.sf-sandbox.env"; set +a; }
