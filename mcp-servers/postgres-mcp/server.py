@@ -62,16 +62,35 @@ _TRANSACTION_FRAME = re.compile(
 )
 # Expand-phase guard: an additive (expand) migration may only CREATE new
 # objects, backfill them, or additively ALTER existing schema (ADD COLUMN,
-# ADD CONSTRAINT, ALTER COLUMN SET DEFAULT, VALIDATE CONSTRAINT). Anything
-# else — DROP/TRUNCATE, contractive ALTER (SET NOT NULL, ALTER COLUMN TYPE,
-# RENAME, SET TABLESPACE, ENABLE/DISABLE TRIGGER, OWNER), or a non-additive
-# verb — is rejected so a mis-authored expand fails safely rather than
-# modifying existing objects. The dangerous additive case (ADD COLUMN NOT
-# NULL) is flagged separately by analyze_locks.
+# ADD CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE
+# CONSTRAINT). DROP NOT NULL is a constraint RELAXATION (makes a column
+# nullable) so the next app build can insert rows without the legacy column
+# during the expand->contract window — it is expand-safe, unlike SET NOT NULL
+# (a contraction). Anything else — DROP/TRUNCATE, contractive ALTER (SET NOT
+# NULL, ALTER COLUMN TYPE, RENAME, SET TABLESPACE, ENABLE/DISABLE TRIGGER,
+# OWNER), or a non-additive verb — is rejected so a mis-authored expand fails
+# safely rather than modifying existing objects. ADD COLUMN NOT NULL is
+# flagged separately by analyze_locks.
 _ADDITIVE_ALTER = re.compile(
     r"\bADD\s+(?:COLUMN|CONSTRAINT|UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|CHECK|EXCLUDE)\b"
     r"|\bALTER\s+COLUMN\b[\s\S]*?\bSET\s+DEFAULT\b"
+    r"|\bALTER\s+COLUMN\b[\s\S]*?\bDROP\s+NOT\s+NULL\b"
     r"|\bVALIDATE\s+CONSTRAINT\b",
+    re.IGNORECASE,
+)
+_CONTRACTIVE_ALTER = re.compile(
+    # Destructive/contractive sub-actions that must never appear in an expand
+    # ALTER, EVEN alongside an additive action. This catches multi-action
+    # smuggling like `ALTER COLUMN a DROP NOT NULL, DROP COLUMN b` — the
+    # additive `DROP NOT NULL` would otherwise mask the destructive `DROP
+    # COLUMN b` in a single statement.
+    r"\bDROP\s+(?:COLUMN|CONSTRAINT|INDEX)\b"
+    r"|\bSET\s+NOT\s+NULL\b"
+    r"|\bALTER\s+COLUMN\s+\S+\s+TYPE\b"
+    r"|\bRENAME\s+(?:TO|COLUMN)\b"
+    r"|\bSET\s+TABLESPACE\b"
+    r"|\b(?:ENABLE|DISABLE)\s+TRIGGER\b"
+    r"|\bOWNER\s+TO\b",
     re.IGNORECASE,
 )
 
@@ -81,8 +100,11 @@ def _is_expand_allowed(clean: str) -> str | None:
 
     Allowlist, not denylist: only additive verbs pass, everything else is
     rejected (fail-closed). Additive = CREATE, INSERT backfill, UPDATE
-    alembic_version stamping, or an ALTER whose action is ADD COLUMN/CONSTRAINT,
-    ALTER COLUMN SET DEFAULT, or VALIDATE CONSTRAINT.
+    alembic_version stamping, or an ALTER whose EVERY sub-action is additive
+    (ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE
+    CONSTRAINT). A contractive sub-action anywhere in an ALTER (DROP COLUMN,
+    SET NOT NULL, ALTER COLUMN TYPE, RENAME, ...) is rejected first, so a
+    destructive action cannot smuggle past an additive one.
     """
     if re.match(r"^\s*CREATE\b", clean, re.IGNORECASE):
         return None
@@ -91,6 +113,8 @@ def _is_expand_allowed(clean: str) -> str | None:
     if re.match(r"^\s*UPDATE\s+alembic_version\b", clean, re.IGNORECASE):
         return None
     if re.match(r"^\s*ALTER\b", clean, re.IGNORECASE):
+        if _CONTRACTIVE_ALTER.search(clean):
+            return "contractive ALTER sub-action"
         if _ADDITIVE_ALTER.search(clean):
             return None
         return "non-additive ALTER"

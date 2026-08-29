@@ -70,6 +70,20 @@ assert _is_expand_allowed(
     "ALTER TABLE users ADD CONSTRAINT fk FOREIGN KEY (uid) REFERENCES users(id)"
 ) is None
 assert _is_expand_allowed("ALTER TABLE users ALTER COLUMN address SET DEFAULT ''") is None
+# DROP NOT NULL is a constraint RELAXATION (expand-safe): it lets the next app
+# build insert rows without the legacy column during the expand->contract window.
+assert _is_expand_allowed("ALTER TABLE users ALTER COLUMN address DROP NOT NULL") is None
+assert _is_expand_allowed("ALTER TABLE users\n  ALTER COLUMN address DROP NOT NULL") is None
+# SET NOT NULL is a contraction (still rejected):
+assert _is_expand_allowed("ALTER TABLE users ALTER COLUMN address SET NOT NULL") is not None
+# Multi-action smuggling: an additive DROP NOT NULL must NOT mask a destructive
+# DROP COLUMN smuggled in the same ALTER statement (Qodo finding).
+assert _is_expand_allowed(
+    "ALTER TABLE users ALTER COLUMN address DROP NOT NULL, DROP COLUMN email"
+) is not None
+assert _is_expand_allowed(
+    "ALTER TABLE users ADD COLUMN x int, DROP COLUMN y int"
+) is not None
 assert _is_expand_allowed("ALTER TABLE users VALIDATE CONSTRAINT chk") is None
 # multi-line additive statement (regex must span newlines for the ALTER clause)
 assert _is_expand_allowed("ALTER TABLE users\n  ADD COLUMN x int") is None
