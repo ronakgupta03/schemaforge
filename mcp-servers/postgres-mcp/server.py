@@ -68,7 +68,7 @@ def _conn(autocommit: bool = True) -> psycopg.Connection:
     dsn = _config.get("database_url")
     if not dsn:
         raise RuntimeError(
-            "postgres-prod is not configured: set a DATABASE_URL via the Settings panel or POST /config"
+            "postgres-prod is not configured: set a DATABASE_URL in Settings -> SchemaForge (Postgres DSN), or POST /config on :9001"
         )
     return psycopg.connect(dsn, row_factory=dict_row, autocommit=autocommit)
 
@@ -361,6 +361,9 @@ class ConfigHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
@@ -397,6 +400,15 @@ class ConfigHandler(BaseHTTPRequestHandler):
         _save_config()
         return self._send(202, {"data": {"ok": True, "configured": True}})
 
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 def run_config_server(host: str = "127.0.0.1") -> None:
     global _config_httpd

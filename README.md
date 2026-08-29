@@ -66,7 +66,7 @@ explains — it never guesses about code or schema.
 | `reference/post-split/`         | Golden post-split outcome (migration, models, parity SQL)                                                          |
 | `mcp-servers/postgres-mcp/`     | Production-Postgres MCP server (read tools + gated`execute_migration`/`execute_ddl`)                           |
 | `mcp-servers/github-mcp/`       | GitHub MCP (branch / write_file / open_pull_request — reversible only)                                            |
-| `scripts/`                      | `apply_agent.py`, `import_skill.py`, `sandbox_setup.sh`, `seed_prod.sh`, `run_mcp_servers.sh`            |
+| `scripts/`                      | `apply_agent.py`, `import_skill.py`, `sandbox_setup.sh`, `seed_prod.sh`, `reset_prod_db.sh`, `run_mcp_servers.sh` |
 
 ## Safety model
 
@@ -150,6 +150,26 @@ Environment (copy `.env.example`): `TRUEFORGE_URL` (use
 `GITHUB_PERSONAL_ACCESS_TOKEN`, `GITHUB_REPO_URL` (used by
 `import_skill.py`), `DAYTONA_API_KEY`, `SCHEMAFORGE_MODEL` (default
 `cloudflare/deepseek-v4-flash`; Cloudflare creds in `~/.zshrc`).
+
+## Resetting the prod database
+
+The demo expects prod in the **pre-split** baseline (alembic `0001`,
+200,000 users / 5,000 books). After a live run applies the split, prod is
+left post-split as evidence. Before the next take — or whenever
+`alembic upgrade head` fails with `Can't locate revision identified by
+'0002'` because the DB is stamped at a migration that has since been
+reverted out of `demo-app/alembic/versions` — reset it to a clean baseline:
+
+```bash
+bash scripts/reset_prod_db.sh
+```
+
+It terminates live connections to the target DB, drops and recreates it
+(connecting via the `/postgres` maintenance database, since
+`DROP`/`CREATE DATABASE` cannot run in a transaction or against the
+connected DB), then re-runs `scripts/seed_prod.sh` (0001 baseline +
+200k / 5k seed). Point it at a different database with
+`DATABASE_URL=postgresql://user:pass@host:5433/bookstore bash scripts/reset_prod_db.sh`.
 
 ## Qodo Code Review Evidence
 
