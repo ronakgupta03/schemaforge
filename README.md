@@ -91,16 +91,20 @@ explains — it never guesses about code or schema.
   `INSERT … SELECT … WHERE NOT EXISTS` reconciliation is allowed to backfill
   stragglers into an existing table idempotently.
 - **Expand-only guard.** `execute_migration` takes a `phase='expand'` mode
-  that rejects any `DROP`/`TRUNCATE`/`ALTER`, so an additive apply can never
-  remove or modify existing schema — only create new objects and backfill.
+  that rejects contractive operations (`DROP TABLE`/`COLUMN`, `TRUNCATE`,
+  raw `ALTER`, `SET NOT NULL`) while allowing additive ones (`CREATE`,
+  `ADD COLUMN`, `INSERT … SELECT` backfill, and relaxing a constraint via
+  `op.alter_column`), so an expand apply adds and backfills but never removes
+  or tightens existing schema.
 - **Two-phase expand/contract (zero-downtime).** For live-traffic splits the
   workflow runs an additive **expand** phase (create + dual-write + backfill)
   that is safe under load, then a later **contract** phase (drop the old
-  columns). The contract is gated by `sf-pipeline contract-gate`, which proves
-  *no deployed code reads the columns being dropped* — and BLOCKS (rather
-  than silently passing) when a requested column is absent from the graph
-  (typo or stale DB snapshot). The contract phase can only run after the
-  operator deploys the final app build.
+  columns). The contract is gated by `sf-pipeline contract-gate`, which
+  verifies the freshly-fetched deployed code has no reads of the columns
+  being dropped — and BLOCKS (rather than silently passing) when a requested
+  column is absent from the graph (typo or stale DB snapshot). The operator
+  attests that the fetched branch matches the deployed revision; the contract
+  phase can only run after the final app build is deployed.
 - **Rollback is real.** The split migration's `downgrade()` is guarded: it
   is blocked with a clear error if any user lacks a profile row, rather
   than fabricating data. (The baseline revision 0001's downgrade is
@@ -235,7 +239,7 @@ Qodo surfaced **9 findings across review rounds**; all resolved to **Bugs 0**:
 | Gate can approve unknown columns (Correctness) | an absent/typo column returned SAFE, bypassing the gate          | An absent requested column is now a hard BLOCKER (`kind: absent`)                                            |
 | Gate scans unverified checkout (Reliability) | facts scanned the locally-modified sandbox tree, not deployed code | Workflow forces a fresh `git fetch` + `reset --hard` to the operator's deployed branch before facts        |
 | Contract SQL range is empty (Correctness)  | `alembic upgrade <current>:head --sql` rendered nothing post-apply | Capture `alembic current` (expand head) before the sandbox apply; render from that revision                  |
-| DROP NOT NULL rejected (Correctness)        | expand-phase verb allowlist rejected `ALTER ... SET NOT NULL`     | Contractive `ALTER` sub-actions (drop column / set not null) allowed in the contract phase                    |
+| Expand DROP-NOT-NULL rejected (Correctness) | expand guard rejected the `NOT NULL` relaxation (`alter_column nullable=True`) the expand phase needs | Workflow uses `op.alter_column(..., nullable=True)`, classified additive (expand-safe), so the relaxation passes the guard |
 | Contract SQL range is empty (dup) (Correctness) | stale inline thread resurfaced                                | Resolved on re-review; threaded review confirmed                                                                 |
 | Expand phase call unsupported (Correctness) | workflow referenced an undefined pipeline sub-command            | Fixed in instructions + skill                                                                                  |
 
