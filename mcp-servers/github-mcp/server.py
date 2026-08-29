@@ -44,14 +44,14 @@ def _save_config() -> None:
 _config: dict = _load_config()
 
 
-def _normalize_repo(repo: str) -> str:
+def _normalize_repo(repo) -> str:
     """Normalize a repo reference to `owner/name`.
 
     Accepts `owner/name` or a full GitHub URL (`https://github.com/owner/name`,
     with optional `www.`, trailing `/` or `.git`). Returns "" when the result
     is not exactly two path components, so callers can raise a clear error.
     """
-    if not repo:
+    if not isinstance(repo, str) or not repo.strip():
         return ""
     s = repo.strip()
     if "://" in s:
@@ -70,7 +70,15 @@ def _normalize_repo(repo: str) -> str:
 
 
 def _resolve_repo(repo: str) -> str:
-    return _normalize_repo(repo) or _normalize_repo(_config.get("default_repo") or "")
+    if repo:
+        norm = _normalize_repo(repo)
+        if not norm:
+            raise ValueError(
+                f"invalid repo {repo!r}: expected `owner/name` or a GitHub URL "
+                f"like https://github.com/owner/name"
+            )
+        return norm
+    return _normalize_repo(_config.get("default_repo") or "")
 
 
 mcp = FastMCP("github")
@@ -306,6 +314,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "token must start with ghp_, github_pat_, gho_, or ghu_"})
             _config["token"] = token
         if default_repo:
+            if not isinstance(default_repo, str) or not _normalize_repo(default_repo):
+                return self._send(400, {"error": "default_repo must be `owner/name` or a GitHub URL like https://github.com/owner/name"})
             _config["default_repo"] = default_repo
         _save_config()
         return self._send(202, {"data": {"ok": True, "configured": bool(_config.get("token"))}})
