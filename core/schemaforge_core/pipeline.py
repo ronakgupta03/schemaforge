@@ -22,6 +22,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .code_facts import collect_facts
+from .code_facts_ts import collect_facts_ts
+from .detect import detect_language
 from .db_snapshot import connect, diff_tables, snapshot
 from .impact_graph import build, impacted_by, impacted_by_columns, to_mermaid
 from .models import CodeFacts, DBSnapshot
@@ -37,7 +39,10 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
 
 
 def cmd_facts(args: argparse.Namespace) -> None:
-    facts = collect_facts(args.app)
+    lang = getattr(args, "lang", "auto") or "auto"
+    if lang == "auto":
+        lang = detect_language(args.app)
+    facts = collect_facts_ts(args.app) if lang == "ts" else collect_facts(args.app)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(facts.to_dict(), indent=2))
     print(
@@ -257,6 +262,7 @@ def main() -> None:
     s = sub.add_parser("facts")
     s.add_argument("--app", required=True)
     s.add_argument("--out", required=True)
+    s.add_argument("--lang", choices=["auto", "python", "ts"], default="auto")
     s.set_defaults(fn=cmd_facts)
 
     s = sub.add_parser("graph")
