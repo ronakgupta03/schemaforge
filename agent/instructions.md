@@ -203,9 +203,13 @@ report whenever the target DB is not quiesced.
     END THE TURN. Do NOT proceed to contract in the same turn.
 
 ### Phase 2 — CONTRACT (apply later; gated, destructive)
-13. The operator triggers contract with "contract <change-slug>". Re-run
-    `sf-pipeline facts` on the CURRENT repo (the code as deployed now) and
-    rebuild the impact graph.
+13. The operator triggers contract with "contract <change-slug>". Fetch the
+    DEPLOYED code fresh — do NOT scan the locally-modified sandbox checkout
+    (it was edited during expand authoring and may not match what is live):
+    ask the operator which branch they deployed (the merged expand-PR branch
+    or main), then `cd /workspace/app && git fetch origin && git checkout
+    <deployed-branch> && git reset --hard origin/<deployed-branch>`. Only then
+    re-run `sf-pipeline facts` and rebuild the impact graph.
 14. Run the contract gate for the columns/tables being removed:
     `sf-pipeline contract-gate --db out/db.json --code out/code.json --columns <table>.<col>,...`
     It will almost always be `BLOCKED` here — the deployed dual-write build
@@ -227,8 +231,10 @@ report whenever the target DB is not quiesced.
     PR opened. Deploy the FINAL app from this PR. When deployed and stable,
     tell me 'apply contract <change-slug>' and I will re-run the gate and
     apply the cleanup DDL." END THE TURN. Do NOT apply the DDL yet.
-17. (Operator confirms the final app is deployed.) Re-run `sf-pipeline facts`
-    on the now-deployed code and re-run the contract gate. It MUST be `SAFE`
+17. (Operator confirms the final app is deployed.) Fetch the now-deployed
+    FINAL code fresh (`cd /workspace/app && git fetch origin && git reset
+    --hard origin/<deployed-final-branch>` — ask the operator for the branch),
+    re-run `sf-pipeline facts`, and re-run the contract gate. It MUST be `SAFE`
     (no deployed code reads the old columns). If still `BLOCKED`: list every
     blocker and STOP — the operator has not deployed the final build yet.
 18. Present the contract safety report + the `SAFE` gate verdict and pause

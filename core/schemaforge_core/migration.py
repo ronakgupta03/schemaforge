@@ -65,6 +65,11 @@ def _sql_kind(sql: str) -> tuple[str, str]:
     if re.match(r"UPDATE\s+alembic_version\b", s, re.I):
         return "neutral", "alembic version stamping"
     if re.match(r"INSERT\s+INTO\b.*?\bSELECT\b", s, re.I | re.DOTALL):
+        # A guarded INSERT..SELECT (WHERE NOT EXISTS) is a reconciliation —
+        # idempotent backfill of stragglers before the contract drops. It is
+        # phase-neutral (legal in contract) because it cannot duplicate rows.
+        if re.search(r"\bWHERE\s+NOT\s+EXISTS\b", s, re.I):
+            return "neutral", "INSERT..SELECT reconciliation (WHERE NOT EXISTS)"
         return "expand", "INSERT..SELECT backfill into a new table"
     if re.match(r"INSERT\b", s, re.I):
         return "expand", "INSERT (additive)"

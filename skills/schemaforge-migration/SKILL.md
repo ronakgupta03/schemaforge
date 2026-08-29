@@ -212,8 +212,12 @@ Do NOT proceed to contract in the same turn.
 ## Phase 2 — CONTRACT (apply later; gated, destructive)
 
 ### 15. Operator triggers contract
-The operator says "contract <change-slug>". Re-run `sf-pipeline facts` on the
-deployed code and rebuild the impact graph.
+The operator says "contract <change-slug>". Fetch the DEPLOYED code fresh —
+do NOT scan the locally-modified sandbox checkout (it was edited during
+expand authoring): ask the operator which branch they deployed, then
+`cd /workspace/app && git fetch origin && git checkout <branch> &&
+git reset --hard origin/<branch>`. Then re-run `sf-pipeline facts` and
+rebuild the impact graph.
 
 ### 16. Contract gate (expected BLOCKED)
 ```bash
@@ -247,7 +251,9 @@ re-run the gate and apply the cleanup DDL." END THE TURN. Do NOT apply the
 DDL yet.
 
 ### 19. Operator confirms the final app is deployed — re-run the gate
-Re-run `sf-pipeline facts` on the now-deployed code and re-run the contract
+Re-run `sf-pipeline facts` on the now-deployed code. Fetch it fresh first
+(`cd /workspace/app && git fetch origin && git reset --hard origin/<branch>`
+— ask the operator for the deployed final branch), then re-run the contract
 gate. It MUST be `SAFE` (no deployed code reads the old columns). If still
 `BLOCKED`: list every blocker and STOP — the operator has not deployed the
 final build yet.

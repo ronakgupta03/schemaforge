@@ -141,6 +141,8 @@ def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
     (NOT the column/table/schema nodes themselves, which are structural).
     """
     code_nodes: set[str] = set()
+    found_cols: set[str] = set()   # columns that exist in the graph at all
+    absent_cols: list[str] = []    # requested columns absent (typo/stale snapshot)
 
     # Map which models map to which tables
     model_to_table: dict[str, str] = {}
@@ -156,10 +158,19 @@ def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
         cid = f"col_{_mid(t_name)}_{_mid(col_name)}" if t_name else ""
         tid = f"table_{_mid(t_name)}" if t_name else ""
 
+        # A column is "present" if it appears as a column node, a
+        # defines_column edge, or an attr access. An absent requested column
+        # (typo, stale DB snapshot, wrong table) cannot be proven safe — it
+        # must BLOCK the gate rather than silently pass as SAFE.
+        present = False
+        if cid and cid in g.nodes:
+            present = True
+
         # 1. Models defining this column
         for e in g.edges:
             if e.kind == "defines_column" and (e.dst == cid or not cid and e.dst.endswith(f"_{_mid(col_name)}")):
                 code_nodes.add(e.src)
+                present = True
 
         # 2. Attr accesses on this column
         for nid, node in g.nodes.items():
@@ -169,7 +180,13 @@ def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
                     mid = f"model_{_mid(parts[0])}"
                     if not tid or model_to_table.get(mid) == tid:
                         code_nodes.add(nid)
+                        present = True
 
+        if not present:
+            absent_cols.append(c)
+            found_cols.discard(c)
+        else:
+            found_cols.add(c)
     # 3. Transitive closures: endpoints executing attr or rawsql (reverse: dst -> src)
     rev: dict[str, list[str]] = defaultdict(list)
     for e in g.edges:
@@ -196,12 +213,17 @@ def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
             blockers.append({"kind": node.kind, "label": node.label, "file": node.file})
             if node.file:
                 files.add(node.file)
+    # An absent requested column (not in the DB snapshot / code graph) is a
+    # hard BLOCKER — the gate cannot prove a column it cannot see is safe.
+    for c in absent_cols:
+        blockers.append({"kind": "absent", "label": c, "file": ""})
     blockers.sort(key=lambda b: (b.get("file") or "", b["label"]))
     return {
         "safe": not blockers,
         "columns": columns,
         "blockers": blockers,
         "files": sorted(files),
+        "absent": absent_cols,
     }
 def to_mermaid(g: ImpactGraph) -> str:
     lines = ["flowchart LR"]
