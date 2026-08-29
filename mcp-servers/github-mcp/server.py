@@ -16,6 +16,9 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 API = "https://api.github.com"
+# Cap archive downloads so a huge repo cannot exhaust server memory (the
+# tarball is buffered then base64-encoded in-process; see get_repo_archive).
+_MAX_ARCHIVE_BYTES = int(os.environ.get("SF_MAX_ARCHIVE_BYTES", str(100 * 1024 * 1024)))  # 100 MiB default
 STATE_DIR = os.environ.get("SF_STATE_DIR", os.path.expanduser("~/.schemaforge"))
 _CONFIG_TOKEN = os.environ.get("SF_MCP_CONFIG_TOKEN")
 CONFIG_PORT = int(os.environ.get("SF_CONFIG_PORT", "9002"))
@@ -41,8 +44,41 @@ def _save_config() -> None:
 _config: dict = _load_config()
 
 
+def _normalize_repo(repo) -> str:
+    """Normalize a repo reference to `owner/name`.
+
+    Accepts `owner/name` or a full GitHub URL (`https://github.com/owner/name`,
+    with optional `www.`, trailing `/` or `.git`). Returns "" when the result
+    is not exactly two path components, so callers can raise a clear error.
+    """
+    if not isinstance(repo, str) or not repo.strip():
+        return ""
+    s = repo.strip()
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    if s.startswith("www."):
+        s = s[len("www."):]
+    if s.startswith("github.com/"):
+        s = s[len("github.com/"):]
+    s = s.rstrip("/")
+    if s.endswith(".git"):
+        s = s[:-4]
+    parts = s.split("/")
+    if len(parts) == 2 and all(parts):
+        return f"{parts[0]}/{parts[1]}"
+    return ""
+
+
 def _resolve_repo(repo: str) -> str:
-    return repo or _config.get("default_repo") or ""
+    if repo:
+        norm = _normalize_repo(repo)
+        if not norm:
+            raise ValueError(
+                f"invalid repo {repo!r}: expected `owner/name` or a GitHub URL "
+                f"like https://github.com/owner/name"
+            )
+        return norm
+    return _normalize_repo(_config.get("default_repo") or "")
 
 
 mcp = FastMCP("github")
@@ -78,6 +114,54 @@ def get_repo(repo: str = "") -> dict:
         "html_url": j["html_url"],
     }
 
+
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
+def get_repo_archive(repo: str = "", ref: str = "") -> dict:
+    """Download the repo source tree as a gzipped tarball, base64-encoded.
+
+    Uses the configured GitHub token, so PRIVATE repos are accessible without
+    exposing credentials to the sandbox (the sandbox has no git creds and
+    cannot `git clone` a private repo). Returns {repo, ref, sha, format,
+    archive_base64}. Decode + extract, e.g.:
+        base64 -d <b64> | tar xzf - --strip-components=1 -C /workspace/app
+    For large repos, fetch via the sandbox `mcp-client` CLI and pipe straight
+    to a file so the blob never enters the model context.
+
+    `sha` is the immutable commit the archive was built from: the ref is
+    resolved to a SHA first, then the tarball is fetched BY that SHA so a
+    branch update between the two requests cannot shift the content
+    (resolution failures raise instead of silently substituting the ref).
+    Archives larger than _MAX_ARCHIVE_BYTES are rejected to bound memory.
+    """
+    repo = _resolve_repo(repo)
+    if not repo:
+        raise ValueError("no repo: pass repo or set default_repo via POST /config")
+    with _client() as c:
+        if not ref:
+            r = c.get(f"{API}/repos/{repo}")
+            r.raise_for_status()
+            ref = r.json()["default_branch"]
+        # Resolve ref -> immutable commit SHA; fail clearly (never substitute ref).
+        rc = c.get(f"{API}/repos/{repo}/commits/{ref}")
+        rc.raise_for_status()
+        sha = rc.json()["sha"]
+        # Fetch the tarball by the immutable SHA, not the mutable branch name.
+        a = c.get(f"{API}/repos/{repo}/tarball/{sha}", follow_redirects=True, timeout=300)
+        a.raise_for_status()
+        data = a.content
+    if len(data) > _MAX_ARCHIVE_BYTES:
+        raise ValueError(
+            f"archive too large: {len(data)} bytes exceeds the "
+            f"{_MAX_ARCHIVE_BYTES} byte cap (raise it with SF_MAX_ARCHIVE_BYTES "
+            f"or reduce the repo size; the sandbox cannot clone private repos)"
+        )
+    return {
+        "repo": repo,
+        "ref": ref,
+        "sha": sha,
+        "format": "tar.gz",
+        "archive_base64": base64.b64encode(data).decode("ascii"),
+    }
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
 def branch_exists(repo: str = "", branch: str = "") -> bool:
@@ -225,9 +309,14 @@ class ConfigHandler(BaseHTTPRequestHandler):
         default_repo = body.get("default_repo")
         if not token and not default_repo:
             return self._send(400, {"error": "at least one of 'token' or 'default_repo' is required"})
+        # Validate the complete payload BEFORE mutating any state, so a
+        # rejected request cannot partially apply (e.g. change the token
+        # while rejecting the repo).
+        if token and (not isinstance(token, str) or not token.startswith(("ghp_", "github_pat_", "gho_", "ghu_"))):
+            return self._send(400, {"error": "token must start with ghp_, github_pat_, gho_, or ghu_"})
+        if default_repo and (not isinstance(default_repo, str) or not _normalize_repo(default_repo)):
+            return self._send(400, {"error": "default_repo must be `owner/name` or a GitHub URL like https://github.com/owner/name"})
         if token:
-            if not isinstance(token, str) or not token.startswith(("ghp_", "github_pat_", "gho_", "ghu_")):
-                return self._send(400, {"error": "token must start with ghp_, github_pat_, gho_, or ghu_"})
             _config["token"] = token
         if default_repo:
             _config["default_repo"] = default_repo

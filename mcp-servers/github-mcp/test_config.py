@@ -57,3 +57,15 @@ def test_config_sets_token_and_repo(config_server):
 def test_repo_defaults_to_default_repo():
     assert mcp_server._resolve_repo("") == "owner/repo"
     assert mcp_server._resolve_repo("other/name") == "other/name"
+
+
+def test_rejected_config_does_not_mutate_state(config_server):
+    before = dict(mcp_server._config)
+    r = httpx.post(
+        f"{config_server}/config",
+        json={"token": "ghp_new", "default_repo": "https://github.com/a/b/c"},
+        headers={"Authorization": "Bearer test-token"},
+        timeout=5,
+    )
+    assert r.status_code == 400
+    assert mcp_server._config == before

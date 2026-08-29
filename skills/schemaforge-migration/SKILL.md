@@ -22,8 +22,10 @@ here is tied to a specific codebase.
    back to the sandbox database for "production" facts — the sandbox DB is a
    rehearsal copy, never a substitute for the real one.
 2. **Repository.** The github MCP must be configured with the repo
-   (`Settings → SchemaForge → GitHub connector`: token + `owner/name`). If
-   unset, ask the user for the repo before cloning.
+   (`Settings → SchemaForge → GitHub connector`: token + `owner/name`). The
+   sandbox cannot `git clone` a private repo (no credentials); the source is
+   fetched via the github MCP `get_repo_archive` instead. If unset, ask the
+   user for the repo.
 3. If either is missing and the user answers, re-check before continuing.
 
 ## Invariants
@@ -39,7 +41,7 @@ here is tied to a specific codebase.
    `RAISE EXCEPTION`s if any row would violate the constraint, BEFORE the
    `ALTER … SET NOT NULL`. (Qodo caught this exact bug class on an early
    agent-authored PR: the downgrade left values `NULL` for rows without a
-   matching profile row, then the `NOT NULL` alteration failed cryptically.
+   matching backfilled row, then the `NOT NULL` alteration failed cryptically.
    Do not regress it.)
 5. The pre-approval flow must fit inside the server's execution window
    (default 600 s): no DDL timing / re-seeding / re-verifying before the
@@ -82,22 +84,44 @@ PR), or artifact-only (no GitHub at all). If the request is ambiguous, ask
 via `ask_user_question` at the approval pause.
 
 ### 1. Sandbox bootstrap (once per session)
-The sandbox starts empty. Determine the target repo, then bootstrap an in-sandbox
-Postgres + tooling in ONE call:
+The sandbox starts empty and has NO git credentials, so it cannot `git clone`
+a private repo. Get the source via the host-side github MCP, then bootstrap
+in-sandbox Postgres + tooling:
 
-1. Resolve the target repo URL:
-   - If `GITHUB_REPO_URL` is set in the sandbox environment, use it.
-   - Else if the `github` MCP is attached, call `get_repo('')` (empty repo resolves
-     to the configured default repo) and use its `clone_url`.
-   - Else ask the operator for the GitHub URL of the app you are migrating.
-   Do NOT assume any specific repo.
-2. Run the generic bootstrap (it ships with this skill), passing the resolved URL:
-   `GITHUB_REPO_URL=<url> bash /opt/tfy/skills/schemaforge-migration/sandbox_setup.sh`
-   It chowns `/workspace` if needed, starts an in-sandbox Postgres, clones the target
-   into `/workspace/app`, installs the app's deps + the SchemaForge core, runs the
-   app's migrations (alembic/django auto-detected), and seeds if the repo declares
+1. Resolve the target repo (pass `owner/name` or a full GitHub URL — the
+   `get_repo_archive` tool normalizes it and resolves the default branch
+   itself):
+   - If `GITHUB_REPO_URL` is set in the sandbox environment, use it. Use THIS
+     repo, not the github MCP default.
+   - Else if the `github` MCP is attached, call `get_repo('')` (empty repo
+     resolves to the configured default repo) for its `full_name`. Do NOT
+     assume any specific repo.
+   - If neither is available, ask the user for the repo.
+2. Fetch the source as a tarball via the github MCP `get_repo_archive`,
+   passing the resolved repo explicitly (token stays host-side; works for
+   private repos; an omitted `ref` resolves to the repo's default branch).
+   Fetch straight to a file with the sandbox `mcp-client` CLI and extract
+   (replace `<owner/name>`):
+
+   ```
+   mkdir -p /workspace && cd /workspace
+   mcp-client call-tool github get_repo_archive '{"repo":"<owner/name>"}' > /tmp/arc.json
+   python3 -c "import json,base64; raw=open('/tmp/arc.json').read(); d,_=json.JSONDecoder().raw_decode(raw); b=d.get('archive_base64') or json.loads(d['content'][0]['text']).get('archive_base64'); open('/workspace/app.tar.gz','wb').write(base64.b64decode(b))"
+   mkdir -p /workspace/app && tar xzf /workspace/app.tar.gz -C /workspace/app --strip-components=1
+   ```
+
+   If the github MCP is absent but `GITHUB_REPO_URL` is a PUBLIC repo,
+   `sandbox_setup.sh` (step 3) falls back to a plain `git clone` of it. If
+   `mcp-client` is unavailable, call `get_repo_archive` via the `call_tool`
+   meta tool and decode its `archive_base64` the same way.
+3. Run the generic bootstrap (ships with this skill) — it no longer clones; it
+   expects the app at `/workspace/app`:
+   `bash /opt/tf/skills/schemaforge-migration/sandbox_setup.sh`
+   It chowns `/workspace` if needed, starts an in-sandbox Postgres, installs the
+   app's deps + the SchemaForge core, runs the app's migrations
+   (alembic/django auto-detected), and seeds if the repo declares
    `SANDBOX_SEED_CMD` in `.sf-sandbox.env`.
-3. Source the activation script in every later shell: `. $HOME/.sfenv-activate.sh`.
+4. Source the activation script in every later shell: `. $HOME/.sfenv-activate.sh`.
    This sets `DATABASE_URL` (in-sandbox), `TEST_DATABASE_URL`, and `APP_DIR`.
 
 All analysis runs against `$APP_DIR` (the target app) and the in-sandbox DB.
@@ -214,10 +238,11 @@ Do NOT proceed to contract in the same turn.
 ### 15. Operator triggers contract
 The operator says "contract <change-slug>". Fetch the DEPLOYED code fresh —
 do NOT scan the locally-modified sandbox checkout (it was edited during
-expand authoring): ask the operator which branch they deployed, then
-`cd /workspace/app && git fetch origin && git checkout <branch> &&
-git reset --hard origin/<branch>`. Then re-run `sf-pipeline facts` and
-rebuild the impact graph.
+expand authoring): ask the operator which branch they deployed, then re-fetch
+that ref via the github MCP `get_repo_archive(ref=<branch>)` (step 1), `rm -rf
+/workspace/app` and extract the fresh tarball over it, then re-init the git
+baseline. (Do NOT `git fetch` — the sandbox has no remote/credentials.) Then
+re-run `sf-pipeline facts` and rebuild the impact graph.
 
 ### 16. Contract gate (expected BLOCKED)
 ```bash
@@ -239,7 +264,7 @@ THEN the `drop_*` / `alter_column` cleanup. Then:
 sf-pipeline validate-phase --migration <contract file> --phase contract
 ```
 Must exit 0. Before applying the contract migration in the sandbox, capture
-the current revision with `alembic current` (the expand head, e.g. `0002a`)
+the current revision with `alembic current` (the expand head)
 and store it as `<expand-head>` — step 21's production offline SQL renders
 from THIS revision, not the post-apply current (which would be the contract
 head and render an empty range). Then verify in the sandbox: apply the
@@ -256,12 +281,12 @@ re-run the gate and apply the cleanup DDL." END THE TURN. Do NOT apply the
 DDL yet.
 
 ### 19. Operator confirms the final app is deployed — re-run the gate
-Re-run `sf-pipeline facts` on the now-deployed code. Fetch it fresh first
-(`cd /workspace/app && git fetch origin && git reset --hard origin/<branch>`
-— ask the operator for the deployed final branch), then re-run the contract
-gate. It MUST be `SAFE` (no deployed code reads the old columns). If still
-`BLOCKED`: list every blocker and STOP — the operator has not deployed the
-final build yet.
+Re-run `sf-pipeline facts` on the now-deployed code. Fetch it fresh first via
+the github MCP `get_repo_archive(ref=<deployed-final-branch>)` (ask the
+operator for the branch), `rm -rf /workspace/app` and extract over it, re-init
+the git baseline, then re-run the contract gate. It MUST be `SAFE` (no
+deployed code reads the old columns). If still `BLOCKED`: list every blocker
+and STOP — the operator has not deployed the final build yet.
 
 ### 20. Present contract report and PAUSE
 Present the contract safety report + the `SAFE` gate verdict and call
