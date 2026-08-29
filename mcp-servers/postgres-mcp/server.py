@@ -60,6 +60,10 @@ _UPDATE_ALEMBIC = re.compile(r"^\s*UPDATE\s+alembic_version\b", re.IGNORECASE)
 _TRANSACTION_FRAME = re.compile(
     r"^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\s*$", re.IGNORECASE
 )
+# Expand-phase guard: an additive (expand) migration may only CREATE new
+# objects and backfill them — it must never DROP/TRUNCATE/ALTER existing
+# schema. Enforces the create-new + backfill expand model.
+_CONTRACTIVE_VERB = re.compile(r"^\s*(DROP|TRUNCATE|ALTER\b)", re.IGNORECASE)
 
 mcp = FastMCP("postgres-prod")
 
@@ -306,14 +310,21 @@ def _existing_tables(conn: psycopg.Connection) -> set[str]:
 @mcp.tool(
     annotations={"destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
     description=(
-        "Apply a full Alembic migration batch (DDL + data backfill + version "
+        "Apply an Alembic migration batch (DDL + data backfill + version "
         "stamping) against the production database inside ONE transaction — a "
         "failure rolls back every earlier statement. Irreversible — the "
-        "harness pauses this call for human approval."
+        "harness pauses this call for human approval. Pass phase='expand' for "
+        "an additive migration: it may only CREATE new objects and backfill "
+        "them — DROP/TRUNCATE/ALTER are rejected so an expand apply never "
+        "modifies or removes existing schema."
     ),
 )
-def execute_migration(sql: str) -> str:
-    """Run an `alembic upgrade 0001:head --sql` batch on prod, atomically."""
+def execute_migration(sql: str, phase: str | None = None) -> str:
+    """Run an `alembic upgrade <rev>:head --sql` batch on prod, atomically.
+
+    phase='expand' rejects any statement whose first verb is DROP/TRUNCATE/ALTER
+    (the expand migration must be purely additive: create new + backfill only).
+    """
     statements = _split_statements(sql)
     if not statements:
         raise ValueError("empty migration batch")
@@ -326,6 +337,14 @@ def execute_migration(sql: str) -> str:
         raise ValueError("migration batch contains only transaction framing")
     for stmt in statements:
         _validate_migration_statement(stmt)
+        if phase == "expand":
+            clean = _strip_sql_comments(stmt)
+            m = _CONTRACTIVE_VERB.match(clean)
+            if m:
+                raise ValueError(
+                    f"expand-phase migration must be additive; contractive verb "
+                    f"{m.group(1)!r} not allowed: {clean[:80]!r}"
+                )
     with _conn(autocommit=False) as conn:
         pre = _existing_tables(conn)
         try:
@@ -346,7 +365,7 @@ def execute_migration(sql: str) -> str:
             raise RuntimeError(
                 f"migration aborted and rolled back at statement {i}/{len(statements)}: {exc}"
             ) from exc
-    return f"applied {len(statements)} migration statement(s) in one transaction"
+    return f"applied {len(statements)} migration statement(s) in one transaction (phase={phase or 'full'})"
 
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
