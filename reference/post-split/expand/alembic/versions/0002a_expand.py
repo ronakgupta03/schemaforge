@@ -1,9 +1,17 @@
-"""0002a expand: create user_profiles and backfill (additive only).
+"""0002a expand: create user_profiles, backfill, and relax NOT NULL.
 
-Zero-downtime phase 1. Safe to apply on a live database: creates a new table
-and backfills it from users WITHOUT dropping or locking users for long. The
-old columns (users.address, users.date_of_birth) remain in place so the
-running application keeps serving.
+Zero-downtime phase 1. Safe to apply on a live database: creates a new table,
+backfills it from users, and makes the legacy address column nullable — all
+WITHOUT dropping or locking users for long. The old columns remain in place
+so the running application keeps serving; making address nullable lets the
+FINAL app build (which no longer writes users.address) insert rows during
+the expand->contract window.
+
+Scope: a one-shot INSERT..SELECT backfill is correct for a quiesced or
+low-write window. Handling truly concurrent writes during the window requires
+app-level dual-write coordination (the expand app build dual-writes; the
+contract phase reconciles stragglers), which is the application's
+responsibility, not the migration agent's.
 
 Revision ID: 0002a
 Revises: 0001
@@ -35,6 +43,9 @@ def upgrade() -> None:
         "INSERT INTO user_profiles (user_id, address, date_of_birth) "
         "SELECT id, address, date_of_birth FROM users"
     )
+    # Relax NOT NULL so the FINAL app build can insert users without address
+    # during the expand->contract window. date_of_birth is already nullable.
+    op.alter_column("users", "address", nullable=True)
 
 
 def downgrade() -> None:

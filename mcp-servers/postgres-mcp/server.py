@@ -62,15 +62,19 @@ _TRANSACTION_FRAME = re.compile(
 )
 # Expand-phase guard: an additive (expand) migration may only CREATE new
 # objects, backfill them, or additively ALTER existing schema (ADD COLUMN,
-# ADD CONSTRAINT, ALTER COLUMN SET DEFAULT, VALIDATE CONSTRAINT). Anything
-# else — DROP/TRUNCATE, contractive ALTER (SET NOT NULL, ALTER COLUMN TYPE,
-# RENAME, SET TABLESPACE, ENABLE/DISABLE TRIGGER, OWNER), or a non-additive
-# verb — is rejected so a mis-authored expand fails safely rather than
-# modifying existing objects. The dangerous additive case (ADD COLUMN NOT
-# NULL) is flagged separately by analyze_locks.
+# ADD CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE
+# CONSTRAINT). DROP NOT NULL is a constraint RELAXATION (makes a column
+# nullable) so the next app build can insert rows without the legacy column
+# during the expand->contract window — it is expand-safe, unlike SET NOT NULL
+# (a contraction). Anything else — DROP/TRUNCATE, contractive ALTER (SET NOT
+# NULL, ALTER COLUMN TYPE, RENAME, SET TABLESPACE, ENABLE/DISABLE TRIGGER,
+# OWNER), or a non-additive verb — is rejected so a mis-authored expand fails
+# safely rather than modifying existing objects. ADD COLUMN NOT NULL is
+# flagged separately by analyze_locks.
 _ADDITIVE_ALTER = re.compile(
     r"\bADD\s+(?:COLUMN|CONSTRAINT|UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|CHECK|EXCLUDE)\b"
     r"|\bALTER\s+COLUMN\b[\s\S]*?\bSET\s+DEFAULT\b"
+    r"|\bALTER\s+COLUMN\b[\s\S]*?\bDROP\s+NOT\s+NULL\b"
     r"|\bVALIDATE\s+CONSTRAINT\b",
     re.IGNORECASE,
 )
@@ -82,7 +86,7 @@ def _is_expand_allowed(clean: str) -> str | None:
     Allowlist, not denylist: only additive verbs pass, everything else is
     rejected (fail-closed). Additive = CREATE, INSERT backfill, UPDATE
     alembic_version stamping, or an ALTER whose action is ADD COLUMN/CONSTRAINT,
-    ALTER COLUMN SET DEFAULT, or VALIDATE CONSTRAINT.
+    ALTER COLUMN SET DEFAULT, DROP NOT NULL, or VALIDATE CONSTRAINT.
     """
     if re.match(r"^\s*CREATE\b", clean, re.IGNORECASE):
         return None

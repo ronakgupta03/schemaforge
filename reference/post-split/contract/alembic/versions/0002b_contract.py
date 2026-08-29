@@ -18,6 +18,16 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Reconcile: backfill user_profiles for any users created/updated after the
+    # expand backfill (e.g. by the old app before the final app deploy) that
+    # still lack a profile row. This closes most of the expand->contract gap;
+    # truly concurrent writes during the drops themselves need app dual-write
+    # or a brief cutover quiesce, which is out of scope for this agent.
+    op.execute(
+        "INSERT INTO user_profiles (user_id, address, date_of_birth) "
+        "SELECT id, address, date_of_birth FROM users u "
+        "WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.user_id = u.id)"
+    )
     op.drop_column("users", "date_of_birth")
     op.drop_column("users", "address")
 
