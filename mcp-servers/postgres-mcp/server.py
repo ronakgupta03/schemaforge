@@ -60,6 +60,41 @@ _UPDATE_ALEMBIC = re.compile(r"^\s*UPDATE\s+alembic_version\b", re.IGNORECASE)
 _TRANSACTION_FRAME = re.compile(
     r"^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\s*$", re.IGNORECASE
 )
+# Expand-phase guard: an additive (expand) migration may only CREATE new
+# objects, backfill them, or additively ALTER existing schema (ADD COLUMN,
+# ADD CONSTRAINT, ALTER COLUMN SET DEFAULT, VALIDATE CONSTRAINT). Anything
+# else — DROP/TRUNCATE, contractive ALTER (SET NOT NULL, ALTER COLUMN TYPE,
+# RENAME, SET TABLESPACE, ENABLE/DISABLE TRIGGER, OWNER), or a non-additive
+# verb — is rejected so a mis-authored expand fails safely rather than
+# modifying existing objects. The dangerous additive case (ADD COLUMN NOT
+# NULL) is flagged separately by analyze_locks.
+_ADDITIVE_ALTER = re.compile(
+    r"\bADD\s+(?:COLUMN|CONSTRAINT|UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|CHECK|EXCLUDE)\b"
+    r"|\bALTER\s+COLUMN\b[\s\S]*?\bSET\s+DEFAULT\b"
+    r"|\bVALIDATE\s+CONSTRAINT\b",
+    re.IGNORECASE,
+)
+
+
+def _is_expand_allowed(clean: str) -> str | None:
+    """Return None if `clean` is an additive (expand-safe) statement, else a reason.
+
+    Allowlist, not denylist: only additive verbs pass, everything else is
+    rejected (fail-closed). Additive = CREATE, INSERT backfill, UPDATE
+    alembic_version stamping, or an ALTER whose action is ADD COLUMN/CONSTRAINT,
+    ALTER COLUMN SET DEFAULT, or VALIDATE CONSTRAINT.
+    """
+    if re.match(r"^\s*CREATE\b", clean, re.IGNORECASE):
+        return None
+    if re.match(r"^\s*INSERT\s+INTO\b", clean, re.IGNORECASE):
+        return None
+    if re.match(r"^\s*UPDATE\s+alembic_version\b", clean, re.IGNORECASE):
+        return None
+    if re.match(r"^\s*ALTER\b", clean, re.IGNORECASE):
+        if _ADDITIVE_ALTER.search(clean):
+            return None
+        return "non-additive ALTER"
+    return "non-additive verb"
 
 mcp = FastMCP("postgres-prod")
 
@@ -306,14 +341,29 @@ def _existing_tables(conn: psycopg.Connection) -> set[str]:
 @mcp.tool(
     annotations={"destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
     description=(
-        "Apply a full Alembic migration batch (DDL + data backfill + version "
+        "Apply an Alembic migration batch (DDL + data backfill + version "
         "stamping) against the production database inside ONE transaction — a "
         "failure rolls back every earlier statement. Irreversible — the "
-        "harness pauses this call for human approval."
+        "harness pauses this call for human approval. Pass phase='expand' for "
+        "an additive migration: it may only CREATE new objects and backfill "
+        "them — DROP/TRUNCATE/ALTER are rejected so an expand apply never "
+        "modifies or removes existing schema."
     ),
 )
-def execute_migration(sql: str) -> str:
-    """Run an `alembic upgrade 0001:head --sql` batch on prod, atomically."""
+def execute_migration(sql: str, phase: str | None = None) -> str:
+    """Run an `alembic upgrade <rev>:head --sql` batch on prod, atomically.
+
+    phase='expand' rejects any statement whose first verb is DROP/TRUNCATE/ALTER
+    (the expand migration must be purely additive: create new + backfill only).
+    """
+    # Fail-closed: the only valid phase values are None (full/contract mode,
+    # backward-compatible — no guard) and 'expand' (additive guard). Any
+    # other value (typo, wrong case, 'contract') is rejected so a misspelled
+    # phase never silently bypasses the expand guard.
+    if phase not in (None, "expand"):
+        raise ValueError(
+            f"invalid phase {phase!r}; must be None (full mode) or 'expand'"
+        )
     statements = _split_statements(sql)
     if not statements:
         raise ValueError("empty migration batch")
@@ -326,6 +376,13 @@ def execute_migration(sql: str) -> str:
         raise ValueError("migration batch contains only transaction framing")
     for stmt in statements:
         _validate_migration_statement(stmt)
+        if phase == "expand":
+            clean = _strip_sql_comments(stmt)
+            reason = _is_expand_allowed(clean)
+            if reason:
+                raise ValueError(
+                    f"expand-phase migration must be additive; {reason}: {clean[:80]!r}"
+                )
     with _conn(autocommit=False) as conn:
         pre = _existing_tables(conn)
         try:
@@ -346,7 +403,7 @@ def execute_migration(sql: str) -> str:
             raise RuntimeError(
                 f"migration aborted and rolled back at statement {i}/{len(statements)}: {exc}"
             ) from exc
-    return f"applied {len(statements)} migration statement(s) in one transaction"
+    return f"applied {len(statements)} migration statement(s) in one transaction (phase={phase or 'full'})"
 
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
