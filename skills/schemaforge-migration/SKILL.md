@@ -88,23 +88,24 @@ The sandbox starts empty and has NO git credentials, so it cannot `git clone`
 a private repo. Get the source via the host-side github MCP, then bootstrap
 in-sandbox Postgres + tooling:
 
-1. Resolve the target repo into `owner/name` + its default branch:
-   - If `GITHUB_REPO_URL` is set in the sandbox environment, normalize it to
-     `owner/name` (strip a leading `https://github.com/` and any trailing
-     `.git`). Use THIS repo, not the github MCP default.
+1. Resolve the target repo (pass `owner/name` or a full GitHub URL — the
+   `get_repo_archive` tool normalizes it and resolves the default branch
+   itself):
+   - If `GITHUB_REPO_URL` is set in the sandbox environment, use it. Use THIS
+     repo, not the github MCP default.
    - Else if the `github` MCP is attached, call `get_repo('')` (empty repo
-     resolves to the configured default repo) for its `full_name` + default
-     branch. Do NOT assume any specific repo.
+     resolves to the configured default repo) for its `full_name`. Do NOT
+     assume any specific repo.
    - If neither is available, ask the user for the repo.
 2. Fetch the source as a tarball via the github MCP `get_repo_archive`,
-   passing the resolved `owner/name` explicitly (token stays host-side; works
-   for private repos). Fetch straight to a file with the sandbox `mcp-client`
-   CLI and extract (replace `<owner/name>` and `<branch>` with the resolved
-   values):
+   passing the resolved repo explicitly (token stays host-side; works for
+   private repos; an omitted `ref` resolves to the repo's default branch).
+   Fetch straight to a file with the sandbox `mcp-client` CLI and extract
+   (replace `<owner/name>`):
 
    ```
    mkdir -p /workspace && cd /workspace
-   mcp-client call-tool github get_repo_archive '{"repo":"<owner/name>","ref":"<branch>"}' > /tmp/arc.json
+   mcp-client call-tool github get_repo_archive '{"repo":"<owner/name>"}' > /tmp/arc.json
    python3 -c "import json,base64; raw=open('/tmp/arc.json').read(); d,_=json.JSONDecoder().raw_decode(raw); b=d.get('archive_base64') or json.loads(d['content'][0]['text']).get('archive_base64'); open('/workspace/app.tar.gz','wb').write(base64.b64decode(b))"
    mkdir -p /workspace/app && tar xzf /workspace/app.tar.gz -C /workspace/app --strip-components=1
    ```

@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 API = "https://api.github.com"
 # Cap archive downloads so a huge repo cannot exhaust server memory (the
 # tarball is buffered then base64-encoded in-process; see get_repo_archive).
-_MAX_ARCHIVE_BYTES = 100 * 1024 * 1024  # 100 MiB
+_MAX_ARCHIVE_BYTES = int(os.environ.get("SF_MAX_ARCHIVE_BYTES", str(100 * 1024 * 1024)))  # 100 MiB default
 STATE_DIR = os.environ.get("SF_STATE_DIR", os.path.expanduser("~/.schemaforge"))
 _CONFIG_TOKEN = os.environ.get("SF_MCP_CONFIG_TOKEN")
 CONFIG_PORT = int(os.environ.get("SF_CONFIG_PORT", "9002"))
@@ -44,8 +44,33 @@ def _save_config() -> None:
 _config: dict = _load_config()
 
 
+def _normalize_repo(repo: str) -> str:
+    """Normalize a repo reference to `owner/name`.
+
+    Accepts `owner/name` or a full GitHub URL (`https://github.com/owner/name`,
+    with optional `www.`, trailing `/` or `.git`). Returns "" when the result
+    is not exactly two path components, so callers can raise a clear error.
+    """
+    if not repo:
+        return ""
+    s = repo.strip()
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    if s.startswith("www."):
+        s = s[len("www."):]
+    if s.startswith("github.com/"):
+        s = s[len("github.com/"):]
+    s = s.rstrip("/")
+    if s.endswith(".git"):
+        s = s[:-4]
+    parts = s.split("/")
+    if len(parts) == 2 and all(parts):
+        return f"{parts[0]}/{parts[1]}"
+    return ""
+
+
 def _resolve_repo(repo: str) -> str:
-    return repo or _config.get("default_repo") or ""
+    return _normalize_repo(repo) or _normalize_repo(_config.get("default_repo") or "")
 
 
 mcp = FastMCP("github")
@@ -118,9 +143,9 @@ def get_repo_archive(repo: str = "", ref: str = "") -> dict:
         data = a.content
     if len(data) > _MAX_ARCHIVE_BYTES:
         raise ValueError(
-            f"archive too large: {len(data)} bytes > {_MAX_ARCHIVE_BYTES} "
-            f"({_MAX_ARCHIVE_BYTES // (1024 * 1024)} MiB cap); fetch a "
-            f"subdirectory or a shallow clone instead"
+            f"archive too large: {len(data)} bytes exceeds the "
+            f"{_MAX_ARCHIVE_BYTES} byte cap (raise it with SF_MAX_ARCHIVE_BYTES "
+            f"or reduce the repo size; the sandbox cannot clone private repos)"
         )
     return {
         "repo": repo,
