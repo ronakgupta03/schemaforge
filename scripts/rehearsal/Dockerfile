@@ -1,7 +1,7 @@
-# Rehearsal image: python + postgresql installed (validates sandbox_setup.sh
-# script logic without re-downloading ~200MB of apt packages per iteration).
+# Rehearsal image: python + postgresql installed (validates the generic
+# sandbox_setup.sh script logic without re-downloading ~200MB of apt packages).
 # Build:  docker build -f scripts/rehearsal/Dockerfile -t sf-rehearsal .
-# Run:    docker run --rm -v $PWD:/workspace -w /workspace sf-rehearsal bash scripts/sandbox_setup.sh
+# Run:    docker run --rm -v $PWD:/workspace -w /workspace -e GITHUB_REPO_URL=<your-repo-url> sf-rehearsal bash skills/schemaforge-migration/sandbox_setup.sh
 FROM python:3.12-bookworm
 
 RUN apt-get update -qq \

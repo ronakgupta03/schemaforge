@@ -62,11 +62,11 @@ explains — it never guesses about code or schema.
 | `agent/instructions.md`         | Root-agent system prompt (workflow, hard rules)                                                                    |
 | `skills/schemaforge-migration/` | TrueForge skill: the migration workflow                                                                            |
 | `core/`                         | `schemaforge_core` — deterministic engine + `sf-pipeline` CLI (snapshot, facts, graph, impact, verify, bench) |
-| `demo-app/`                     | FastAPI + SQLAlchemy 2.0 + Alembic bookstore (the demo target)                                                     |
+| `demo-app/`                     | FastAPI + SQLAlchemy 2.0 + Alembic bookstore (demo target) + fixture scripts: `seed_prod.sh`, `reset_prod_db.sh`, `prod-postgres/`, `.sf-sandbox.env` |
 | `reference/post-split/`         | Golden post-split outcome (migration, models, parity SQL)                                                          |
 | `mcp-servers/postgres-mcp/`     | Production-Postgres MCP server (read tools + gated`execute_migration`/`execute_ddl`)                           |
 | `mcp-servers/github-mcp/`       | GitHub MCP (branch / write_file / open_pull_request — reversible only)                                            |
-| `scripts/`                      | `apply_agent.py`, `import_skill.py`, `sandbox_setup.sh`, `seed_prod.sh`, `reset_prod_db.sh`, `run_mcp_servers.sh` |
+| `scripts/`                      | `apply_agent.py`, `import_skill.py`, `run_mcp_servers.sh`, `setup_local_model.py`, `patch-trueforge-mermaid.py`, `rehearsal/` |
 
 ## Safety model
 
@@ -131,8 +131,8 @@ SERVER_EXECUTION_TIMEOUT_SECONDS=1800 npx @truefoundry/trueforge
 scripts/patch-trueforge-mermaid.py   # harness on [::1]:8790 (SQLite local mode)
 
 # 2. Provision prod (pre-split baseline: alembic 0001, 200k users / 5k books)
-docker compose -f scripts/prod-postgres/docker-compose.yml up -d
-bash scripts/seed_prod.sh
+docker compose -f demo-app/prod-postgres/docker-compose.yml up -d
+bash demo-app/seed_prod.sh
 
 # 3. Register the agent + skill (idempotent)
 .vevn/bin/python scripts/apply_agent.py
@@ -161,15 +161,15 @@ left post-split as evidence. Before the next take — or whenever
 reverted out of `demo-app/alembic/versions` — reset it to a clean baseline:
 
 ```bash
-bash scripts/reset_prod_db.sh
+bash demo-app/reset_prod_db.sh
 ```
 
 It terminates live connections to the target DB, drops and recreates it
 (connecting via the `/postgres` maintenance database, since
 `DROP`/`CREATE DATABASE` cannot run in a transaction or against the
-connected DB), then re-runs `scripts/seed_prod.sh` (0001 baseline +
+`connected DB), then re-runs `demo-app/seed_prod.sh` (0001 baseline +
 200k / 5k seed). Point it at a different database with
-`DATABASE_URL=postgresql://user:pass@host:5433/bookstore bash scripts/reset_prod_db.sh`.
+`DATABASE_URL=postgresql://user:pass@host:5433/bookstore bash demo-app/reset_prod_db.sh`.
 
 ## Qodo Code Review Evidence
 

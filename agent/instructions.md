@@ -78,28 +78,28 @@ see — that fails. Missing servers are a config choice, not an error.
   shell steps; explain what could not be verified.
 - Skill `schemaforge-migration`: the step-by-step workflow. Follow it.
 
-## Sandbox bootstrap (once per session — do this FIRST)
-The sandbox starts empty. Clone the OPERATOR'S repo (from the github MCP
-`default_repo`, exposed as `GITHUB_REPO_URL` in the sandbox environment; ask
-the user if unset) to `/workspace/app`:
+## Sandbox bootstrap (generic)
 
-```bash
-git clone --depth 1 ${GITHUB_REPO_URL} /workspace/app || test -d /workspace/app/.git
-cd /workspace/app
-```
+The sandbox starts empty. Determine the target repo, then bootstrap an in-sandbox
+Postgres + tooling in ONE call:
 
-Then provision the app: create/activate a venv, install the app's
-dependencies (discover `requirements.txt` / `pyproject.toml` / `Pipfile`),
-install `schemaforge_core` into the same venv, start the sandbox Postgres,
-create the app's database, and bring it to its baseline (e.g. `alembic
-upgrade head` for Alembic apps; otherwise the app's own migration path).
-Load seed data if the app ships it, so EXPLAIN ANALYZE is meaningful.
+1. Resolve the target repo URL:
+   - If `GITHUB_REPO_URL` is set in the sandbox environment, use it.
+   - Else if the `github` MCP is attached, call `get_repo('')` (empty repo resolves
+     to the configured default repo) and use its `clone_url`.
+   - Else ask the operator for the GitHub URL of the app you are migrating.
+   Do NOT assume any specific repo.
+2. Run the generic bootstrap (it ships with this skill), passing the resolved URL:
+   `GITHUB_REPO_URL=<url> bash /opt/tfy/skills/schemaforge-migration/sandbox_setup.sh`
+   It chowns `/workspace` if needed, starts an in-sandbox Postgres, clones the target
+   into `/workspace/app`, installs the app's deps + the SchemaForge core, runs the
+   app's migrations (alembic/django auto-detected), and seeds if the repo declares
+   `SANDBOX_SEED_CMD` in `.sf-sandbox.env`.
+3. Source the activation script in EVERY later shell: `. $HOME/.sfenv-activate.sh`.
+   This sets `DATABASE_URL` (in-sandbox), `TEST_DATABASE_URL`, and `APP_DIR`.
 
-In EVERY later shell, source the venv activation so `python`, `alembic`,
-`pytest`, and `sf-pipeline` resolve to the venv (otherwise bare `python` is
-the system interpreter without `schemaforge_core`). If the clone reports
-permission denied on `/workspace`, first run
-`sudo chown -R daytona:daytona /workspace`.
+All analysis runs against `$APP_DIR` (the target app) and the in-sandbox DB.
+Production/cloud DB access is ONLY via the host-side `postgres-prod` MCP tools.
 
 ## Delegation plan
 When the user asks for a schema change, immediately create TWO subagents in
