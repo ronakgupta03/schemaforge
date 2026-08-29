@@ -245,8 +245,8 @@ report whenever the target DB is not quiesced.
     created after backfill), THEN the `drop_*` / `alter_column` cleanup. Then
     `sf-pipeline validate-phase --migration <contract file> --phase contract`
     (must exit 0). Before applying the contract migration in the sandbox,
-    capture the current revision with `alembic current` (the expand head,
-    e.g. `0002a`) and store it as `<expand-head>` — step 19's production
+    capture the current revision with `alembic current` (the expand head)
+    and store it as `<expand-head>` — step 19's production
     offline SQL renders from THIS revision, NOT the post-apply current (which
     would be the contract head and render an empty range). Then verify in the
     sandbox: apply the contract migration, run the final tests, parity

@@ -41,7 +41,7 @@ here is tied to a specific codebase.
    `RAISE EXCEPTION`s if any row would violate the constraint, BEFORE the
    `ALTER … SET NOT NULL`. (Qodo caught this exact bug class on an early
    agent-authored PR: the downgrade left values `NULL` for rows without a
-   matching profile row, then the `NOT NULL` alteration failed cryptically.
+   matching backfilled row, then the `NOT NULL` alteration failed cryptically.
    Do not regress it.)
 5. The pre-approval flow must fit inside the server's execution window
    (default 600 s): no DDL timing / re-seeding / re-verifying before the
@@ -256,7 +256,7 @@ THEN the `drop_*` / `alter_column` cleanup. Then:
 sf-pipeline validate-phase --migration <contract file> --phase contract
 ```
 Must exit 0. Before applying the contract migration in the sandbox, capture
-the current revision with `alembic current` (the expand head, e.g. `0002a`)
+the current revision with `alembic current` (the expand head)
 and store it as `<expand-head>` — step 21's production offline SQL renders
 from THIS revision, not the post-apply current (which would be the contract
 head and render an empty range). Then verify in the sandbox: apply the
