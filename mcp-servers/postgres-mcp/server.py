@@ -61,17 +61,40 @@ _TRANSACTION_FRAME = re.compile(
     r"^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\s*$", re.IGNORECASE
 )
 # Expand-phase guard: an additive (expand) migration may only CREATE new
-# objects, backfill them, or additively ALTER existing schema (ADD COLUMN
-# nullable, ADD CONSTRAINT, SET DEFAULT). It must never DROP/TRUNCATE or
-# contractively ALTER (DROP COLUMN/CONSTRAINT, SET NOT NULL, ALTER COLUMN TYPE)
-# — those remove or rewrite existing schema and belong to the contract phase.
-# The dangerous additive cases (NOT NULL) are flagged separately by analyze_locks.
-_CONTRACTIVE_VERB = re.compile(
-    r"^\s*(DROP|TRUNCATE)\b"
-    r"|^\s*ALTER\b[\s\S]*?\b(DROP|SET\s+NOT\s+NULL)\b"
-    r"|^\s*ALTER\b[\s\S]*?ALTER\s+COLUMN\s+\S+\s+(TYPE)\b",
+# objects, backfill them, or additively ALTER existing schema (ADD COLUMN,
+# ADD CONSTRAINT, ALTER COLUMN SET DEFAULT, VALIDATE CONSTRAINT). Anything
+# else — DROP/TRUNCATE, contractive ALTER (SET NOT NULL, ALTER COLUMN TYPE,
+# RENAME, SET TABLESPACE, ENABLE/DISABLE TRIGGER, OWNER), or a non-additive
+# verb — is rejected so a mis-authored expand fails safely rather than
+# modifying existing objects. The dangerous additive case (ADD COLUMN NOT
+# NULL) is flagged separately by analyze_locks.
+_ADDITIVE_ALTER = re.compile(
+    r"\bADD\s+(?:COLUMN|CONSTRAINT|UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|CHECK|EXCLUDE)\b"
+    r"|\bALTER\s+COLUMN\b[\s\S]*?\bSET\s+DEFAULT\b"
+    r"|\bVALIDATE\s+CONSTRAINT\b",
     re.IGNORECASE,
 )
+
+
+def _is_expand_allowed(clean: str) -> str | None:
+    """Return None if `clean` is an additive (expand-safe) statement, else a reason.
+
+    Allowlist, not denylist: only additive verbs pass, everything else is
+    rejected (fail-closed). Additive = CREATE, INSERT backfill, UPDATE
+    alembic_version stamping, or an ALTER whose action is ADD COLUMN/CONSTRAINT,
+    ALTER COLUMN SET DEFAULT, or VALIDATE CONSTRAINT.
+    """
+    if re.match(r"^\s*CREATE\b", clean, re.IGNORECASE):
+        return None
+    if re.match(r"^\s*INSERT\s+INTO\b", clean, re.IGNORECASE):
+        return None
+    if re.match(r"^\s*UPDATE\s+alembic_version\b", clean, re.IGNORECASE):
+        return None
+    if re.match(r"^\s*ALTER\b", clean, re.IGNORECASE):
+        if _ADDITIVE_ALTER.search(clean):
+            return None
+        return "non-additive ALTER"
+    return "non-additive verb"
 
 mcp = FastMCP("postgres-prod")
 
@@ -355,11 +378,10 @@ def execute_migration(sql: str, phase: str | None = None) -> str:
         _validate_migration_statement(stmt)
         if phase == "expand":
             clean = _strip_sql_comments(stmt)
-            m = _CONTRACTIVE_VERB.match(clean)
-            if m:
+            reason = _is_expand_allowed(clean)
+            if reason:
                 raise ValueError(
-                    f"expand-phase migration must be additive; contractive "
-                    f"{(m.group(1) or m.group(2) or m.group(3)).upper()!r} not allowed: {clean[:80]!r}"
+                    f"expand-phase migration must be additive; {reason}: {clean[:80]!r}"
                 )
     with _conn(autocommit=False) as conn:
         pre = _existing_tables(conn)
