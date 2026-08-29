@@ -16,6 +16,9 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 API = "https://api.github.com"
+# Cap archive downloads so a huge repo cannot exhaust server memory (the
+# tarball is buffered then base64-encoded in-process; see get_repo_archive).
+_MAX_ARCHIVE_BYTES = 100 * 1024 * 1024  # 100 MiB
 STATE_DIR = os.environ.get("SF_STATE_DIR", os.path.expanduser("~/.schemaforge"))
 _CONFIG_TOKEN = os.environ.get("SF_MCP_CONFIG_TOKEN")
 CONFIG_PORT = int(os.environ.get("SF_CONFIG_PORT", "9002"))
@@ -90,6 +93,12 @@ def get_repo_archive(repo: str = "", ref: str = "") -> dict:
         base64 -d <b64> | tar xzf - --strip-components=1 -C /workspace/app
     For large repos, fetch via the sandbox `mcp-client` CLI and pipe straight
     to a file so the blob never enters the model context.
+
+    `sha` is the immutable commit the archive was built from: the ref is
+    resolved to a SHA first, then the tarball is fetched BY that SHA so a
+    branch update between the two requests cannot shift the content
+    (resolution failures raise instead of silently substituting the ref).
+    Archives larger than _MAX_ARCHIVE_BYTES are rejected to bound memory.
     """
     repo = _resolve_repo(repo)
     if not repo:
@@ -99,16 +108,20 @@ def get_repo_archive(repo: str = "", ref: str = "") -> dict:
             r = c.get(f"{API}/repos/{repo}")
             r.raise_for_status()
             ref = r.json()["default_branch"]
-        sha = ref
-        try:
-            rc = c.get(f"{API}/repos/{repo}/commits/{ref}")
-            rc.raise_for_status()
-            sha = rc.json()["sha"]
-        except Exception:
-            pass
-        a = c.get(f"{API}/repos/{repo}/tarball/{ref}", follow_redirects=True, timeout=300)
+        # Resolve ref -> immutable commit SHA; fail clearly (never substitute ref).
+        rc = c.get(f"{API}/repos/{repo}/commits/{ref}")
+        rc.raise_for_status()
+        sha = rc.json()["sha"]
+        # Fetch the tarball by the immutable SHA, not the mutable branch name.
+        a = c.get(f"{API}/repos/{repo}/tarball/{sha}", follow_redirects=True, timeout=300)
         a.raise_for_status()
         data = a.content
+    if len(data) > _MAX_ARCHIVE_BYTES:
+        raise ValueError(
+            f"archive too large: {len(data)} bytes > {_MAX_ARCHIVE_BYTES} "
+            f"({_MAX_ARCHIVE_BYTES // (1024 * 1024)} MiB cap); fetch a "
+            f"subdirectory or a shallow clone instead"
+        )
     return {
         "repo": repo,
         "ref": ref,

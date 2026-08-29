@@ -88,23 +88,30 @@ The sandbox starts empty and has NO git credentials, so it cannot `git clone`
 a private repo. Get the source via the host-side github MCP, then bootstrap
 in-sandbox Postgres + tooling:
 
-1. Resolve the target repo:
-   - If `GITHUB_REPO_URL` is set in the sandbox environment, note it.
+1. Resolve the target repo into `owner/name` + its default branch:
+   - If `GITHUB_REPO_URL` is set in the sandbox environment, normalize it to
+     `owner/name` (strip a leading `https://github.com/` and any trailing
+     `.git`). Use THIS repo, not the github MCP default.
    - Else if the `github` MCP is attached, call `get_repo('')` (empty repo
      resolves to the configured default repo) for its `full_name` + default
      branch. Do NOT assume any specific repo.
-2. Fetch the source as a tarball via the github MCP `get_repo_archive` (token
-   stays host-side; works for private repos). Fetch straight to a file with the
-   sandbox `mcp-client` CLI and extract (replace `<branch>` with the default):
+   - If neither is available, ask the user for the repo.
+2. Fetch the source as a tarball via the github MCP `get_repo_archive`,
+   passing the resolved `owner/name` explicitly (token stays host-side; works
+   for private repos). Fetch straight to a file with the sandbox `mcp-client`
+   CLI and extract (replace `<owner/name>` and `<branch>` with the resolved
+   values):
 
    ```
    mkdir -p /workspace && cd /workspace
-   mcp-client call-tool github get_repo_archive '{"ref":"<branch>"}' > /tmp/arc.json
+   mcp-client call-tool github get_repo_archive '{"repo":"<owner/name>","ref":"<branch>"}' > /tmp/arc.json
    python3 -c "import json,base64; raw=open('/tmp/arc.json').read(); d,_=json.JSONDecoder().raw_decode(raw); b=d.get('archive_base64') or json.loads(d['content'][0]['text']).get('archive_base64'); open('/workspace/app.tar.gz','wb').write(base64.b64decode(b))"
    mkdir -p /workspace/app && tar xzf /workspace/app.tar.gz -C /workspace/app --strip-components=1
    ```
 
-   If `mcp-client` is unavailable, call `get_repo_archive` via the `call_tool`
+   If the github MCP is absent but `GITHUB_REPO_URL` is a PUBLIC repo,
+   `sandbox_setup.sh` (step 3) falls back to a plain `git clone` of it. If
+   `mcp-client` is unavailable, call `get_repo_archive` via the `call_tool`
    meta tool and decode its `archive_base64` the same way.
 3. Run the generic bootstrap (ships with this skill) — it no longer clones; it
    expects the app at `/workspace/app`:
