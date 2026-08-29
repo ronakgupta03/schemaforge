@@ -61,9 +61,17 @@ _TRANSACTION_FRAME = re.compile(
     r"^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\s*$", re.IGNORECASE
 )
 # Expand-phase guard: an additive (expand) migration may only CREATE new
-# objects and backfill them — it must never DROP/TRUNCATE/ALTER existing
-# schema. Enforces the create-new + backfill expand model.
-_CONTRACTIVE_VERB = re.compile(r"^\s*(DROP|TRUNCATE|ALTER\b)", re.IGNORECASE)
+# objects, backfill them, or additively ALTER existing schema (ADD COLUMN
+# nullable, ADD CONSTRAINT, SET DEFAULT). It must never DROP/TRUNCATE or
+# contractively ALTER (DROP COLUMN/CONSTRAINT, SET NOT NULL, ALTER COLUMN TYPE)
+# — those remove or rewrite existing schema and belong to the contract phase.
+# The dangerous additive cases (NOT NULL) are flagged separately by analyze_locks.
+_CONTRACTIVE_VERB = re.compile(
+    r"^\s*(DROP|TRUNCATE)\b"
+    r"|^\s*ALTER\b[\s\S]*?\b(DROP|SET\s+NOT\s+NULL)\b"
+    r"|^\s*ALTER\b[\s\S]*?ALTER\s+COLUMN\s+\S+\s+(TYPE)\b",
+    re.IGNORECASE,
+)
 
 mcp = FastMCP("postgres-prod")
 
@@ -342,8 +350,8 @@ def execute_migration(sql: str, phase: str | None = None) -> str:
             m = _CONTRACTIVE_VERB.match(clean)
             if m:
                 raise ValueError(
-                    f"expand-phase migration must be additive; contractive verb "
-                    f"{m.group(1)!r} not allowed: {clean[:80]!r}"
+                    f"expand-phase migration must be additive; contractive "
+                    f"{(m.group(1) or m.group(2) or m.group(3)).upper()!r} not allowed: {clean[:80]!r}"
                 )
     with _conn(autocommit=False) as conn:
         pre = _existing_tables(conn)
