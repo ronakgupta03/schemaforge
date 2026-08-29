@@ -134,39 +134,65 @@ has five sections:
 
 ## Run it — full local stack (all components, dev setup)
 
+Everything boots from the CLI — venv, MCP servers, registry, TrueForge, and
+the Evidence UI — and already-running services on the default ports are
+reused instead of restarted:
+
 ```bash
-# 0. One-time environment (creates the .vevn venv the scripts use)
-uv venv .vevn                                     # Python 3.14, uv
-uv pip install --python .vevn/bin/python -e core
-uv pip install --python .vevn/bin/python -r demo-app/requirements.txt
-uv pip install --python .vevn/bin/python -r mcp-servers/postgres-mcp/requirements.txt
-uv pip install --python .vevn/bin/python -r mcp-servers/github-mcp/requirements.txt
+# 0. One-time environment
+cp .env.example .env   # set DATABASE_URL, GITHUB_PERSONAL_ACCESS_TOKEN,
+                       # GITHUB_REPO_URL, DAYTONA_API_KEY, SCHEMAFORGE_MODEL
 
-# 1. Services
-bash scripts/run_mcp_servers.sh      # postgres-mcp :8001, github-mcp :8002
-SERVER_EXECUTION_TIMEOUT_SECONDS=1800 npx @truefoundry/trueforge
-scripts/patch-trueforge-mermaid.py   # harness on [::1]:8790 (SQLite local mode)
-
-# 2. Provision prod (pre-split baseline: alembic 0001, 200k users / 5k books)
-docker compose -f demo-app/prod-postgres/docker-compose.yml up -d
-bash demo-app/seed_prod.sh
-
-# 3. Register the agent + skill (idempotent)
-.vevn/bin/python scripts/apply_agent.py
-.vevn/bin/python scripts/import_skill.py
-
-# 4. In the TrueForge UI (http://localhost:8790), chat with `schemaforge`:
-#    "Split the users table into users and user_profiles. user_profiles
-#    gets id, user_id (1:1 FK), address, date_of_birth. users keeps id,
-#    name, email. The API response shape of /users must not change."
+# 1. Start the full stack
+node packages/cli/bin/schemaforge.js   # dev mode from a repo checkout
+# or: npx @schemaforge/schemaforge     # published package (see above)
 ```
 
-Environment (copy `.env.example`): `TRUEFORGE_URL` (use
-`http://[::1]:8790` for API clients — local mode binds IPv6 loopback),
-`DATABASE_URL` (prod), `POSTGRES_MCP_URL`, `GITHUB_MCP_URL`,
+First run creates the venv (`~/.schemaforge/.sfenv`) and installs the engine
++ MCP deps, then starts and waits on:
+
+| Service        | Port  | Notes                                        |
+| -------------- | ----- | -------------------------------------------- |
+| `postgres-mcp` | 8001  | prod-Postgres MCP (config endpoint on 9001)  |
+| `github-mcp`   | 8002  | GitHub MCP (config endpoint on 9002)         |
+| `sf-registry`  | 9010  | Settings-tab backend                         |
+| TrueForge      | 8790  | `npx @truefoundry/trueforge`, local SQLite mode |
+| Evidence UI    | 5173  | Settings tab + agent chat (opens in browser)  |
+
+The agent is registered automatically (apply-agent). Configure everything in
+the Settings tab: Models → Connectors (prod Postgres DSN + GitHub
+token/repo) → Sandbox (Daytona key) → Apply Agent. Nothing is hardcoded;
+unconfigured services are simply omitted.
+
+To lift TrueForge's default 600 s turn cap for long analysis runs, export
+`SERVER_EXECUTION_TIMEOUT_SECONDS=1800` before starting the CLI.
+
+For the bookstore demo, additionally provision prod (pre-split baseline:
+alembic `0001`, 200k users / 5k books):
+
+```bash
+docker compose -f demo-app/prod-postgres/docker-compose.yml up -d
+bash demo-app/seed_prod.sh
+```
+
+Then chat with `schemaforge` in the Evidence UI and prompt, e.g.: "Split the
+users table into users and user_profiles. user_profiles gets id, user_id
+(1:1 FK), address, date_of_birth. users keeps id, name, email. The API
+response shape of /users must not change."
+
+Manual alternative (component-by-component, no CLI): `bash
+scripts/run_mcp_servers.sh` (postgres-mcp :8001, github-mcp :8002,
+sf-registry :9010) → `SERVER_EXECUTION_TIMEOUT_SECONDS=1800 npx
+@truefoundry/trueforge` → `scripts/patch-trueforge-mermaid.py` (raw
+TrueForge UI only) → `.vevn/bin/python scripts/apply_agent.py` +
+`scripts/import_skill.py`.
+
+Environment (copy `.env.example`): `DATABASE_URL` (prod),
 `GITHUB_PERSONAL_ACCESS_TOKEN`, `GITHUB_REPO_URL` (used by
-`import_skill.py`), `DAYTONA_API_KEY`, `SCHEMAFORGE_MODEL` (default
-`cloudflare/deepseek-v4-flash`; Cloudflare creds in `~/.zshrc`).
+`import_skill.py` / the GitHub connector), `DAYTONA_API_KEY`,
+`SCHEMAFORGE_MODEL` (default `cloudflare/deepseek-v4-flash`; Cloudflare
+creds in `~/.zshrc`). The CLI probes TrueForge on both `::1` and
+`127.0.0.1` and reuses whichever is running.
 
 ## Resetting the prod database
 
