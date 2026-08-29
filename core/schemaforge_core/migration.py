@@ -64,6 +64,10 @@ def _sql_kind(sql: str) -> tuple[str, str]:
     s = sql.strip()
     if re.match(r"UPDATE\s+alembic_version\b", s, re.I):
         return "neutral", "alembic version stamping"
+    if re.match(r"UPDATE\b", s, re.I):
+        # A data backfill UPDATE is additive work belonging to the expand
+        # phase (it mutates rows, not schema). Lock analysis flags it heavy.
+        return "expand", "UPDATE (data backfill)"
     if re.match(r"INSERT\s+INTO\b.*?\bSELECT\b", s, re.I | re.DOTALL):
         # A guarded INSERT..SELECT (WHERE NOT EXISTS) is a reconciliation —
         # idempotent backfill of stragglers before the contract drops. It is
@@ -173,6 +177,12 @@ def _lock_for(op: OpClass) -> tuple[str, bool, str, str]:
     if op.reason.startswith("INSERT..SELECT"):
         return ("Share", False, "dangerous",
                 "backfill in batches (LIMIT/OFFSET or keyset) to avoid a long Share lock on the source table")
+    if op.reason.startswith("UPDATE"):
+        # A large UPDATE backfill holds row locks for the whole transaction;
+        # without a proof it is bounded/batched it is dangerous, consistent with
+        # _sql_kind labelling UPDATE a data backfill whose lock analysis is heavy.
+        return ("RowExclusive", False, "dangerous",
+                "batch the UPDATE (keyset/LIMIT-OFFSET) to keep transactions short and avoid long row locks")
     if op.reason == "CREATE (additive)":
         return ("none", False, "safe", "")
     if op.reason.startswith("DROP/TRUNCATE"):

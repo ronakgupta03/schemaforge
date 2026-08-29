@@ -175,6 +175,11 @@ report whenever the target DB is not quiesced.
 2. Clarify the change (ask_user_question if genuinely ambiguous).
 3. Spawn the two subagents (parallel): `db-analysis` (postgres-prod MCP
    tools) and `code-analysis` (sandbox `sf-pipeline facts`).
+   The `sf-pipeline` auto-detects the language: Python/SQLAlchemy or
+   TypeScript/Drizzle (`pgTable`/`sqliteTable`/`mysqlTable` + Hono/Express
+   routes). For TS apps, migrations are plain SQL classified by SQL verb (no
+   Alembic `op.*`); `validate-phase`/`analyze-locks`/`verify` route on the
+   migration file extension (`.sql` vs `.py`).
 4. Merge into the impact graph; show the user the mermaid graph + impacted
    files/endpoints.
 5. Author the EXPAND migration (`alembic/versions/<rev>a_<slug>.py`):

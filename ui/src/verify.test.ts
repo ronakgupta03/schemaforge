@@ -10,7 +10,7 @@ const good = JSON.stringify({
 describe("parseVerify", () => {
   it("parses valid JSON", () => {
     const v = parseVerify(good);
-    expect(v?.alembic_ok).toBe(true);
+    expect(v?.apply_ok).toBe(true);
     expect(v?.diff.added_tables).toEqual(["user_profiles"]);
   });
   it("returns null on invalid JSON", () => {
@@ -26,8 +26,8 @@ describe("parseVerify", () => {
     });
     const v = parseVerify(malformed);
     expect(v).not.toBeNull();
-    expect(v?.alembic_ok).toBe(true);
-    expect(v?.pytest_ok).toBe(true);
+    expect(v?.apply_ok).toBe(true);
+    expect(v?.test_ok).toBe(true);
     expect(Array.isArray(v?.explain)).toBe(true);
     expect(v?.explain).toEqual([]);
     expect(v?.diff).toEqual({});

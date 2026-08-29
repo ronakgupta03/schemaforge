@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -22,6 +23,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .code_facts import collect_facts
+from .code_facts_ts import collect_facts_ts
+from .detect import detect_language, detect_migration_tool
 from .db_snapshot import connect, diff_tables, snapshot
 from .impact_graph import build, impacted_by, impacted_by_columns, to_mermaid
 from .models import CodeFacts, DBSnapshot
@@ -37,7 +40,10 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
 
 
 def cmd_facts(args: argparse.Namespace) -> None:
-    facts = collect_facts(args.app)
+    lang = getattr(args, "lang", "auto") or "auto"
+    if lang == "auto":
+        lang = detect_language(args.app)
+    facts = collect_facts_ts(args.app) if lang == "ts" else collect_facts(args.app)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(facts.to_dict(), indent=2))
     print(
@@ -74,9 +80,14 @@ def cmd_impact(args: argparse.Namespace) -> None:
 
 
 def cmd_validate_phase(args: argparse.Namespace) -> None:
-    from .migration import validate_phase
+    if Path(args.migration).suffix == ".sql":
+        from .migration_sql import validate_phase_sql
+        validate_fn = validate_phase_sql
+    else:
+        from .migration import validate_phase
+        validate_fn = validate_phase
     try:
-        validate_phase(args.migration, args.phase)
+        validate_fn(args.migration, args.phase)
         print(f"validate-phase -> OK ({args.phase}-pure)")
     except ValueError as exc:
         print(f"validate-phase -> FAIL: {exc}", file=sys.stderr)
@@ -100,8 +111,12 @@ def cmd_contract_gate(args: argparse.Namespace) -> None:
 
 
 def cmd_analyze_locks(args: argparse.Namespace) -> None:
-    from .migration import analyze_locks
-    reports = analyze_locks(args.migration)
+    if Path(args.migration).suffix == ".sql":
+        from .migration_sql import analyze_locks_sql
+        reports = analyze_locks_sql(args.migration)
+    else:
+        from .migration import analyze_locks
+        reports = analyze_locks(args.migration)
     data = [{"statement": r.statement, "line": r.lineno, "lock": r.lock,
              "rewrites": r.rewrites, "risk": r.risk, "alternative": r.alternative}
             for r in reports]
@@ -149,16 +164,144 @@ def _test_dsn(dsn: str) -> str:
     return urlunsplit((p.scheme, p.netloc, "/".join(path), p.query, p.fragment))
 
 
+def _apply_sql_migrations(
+    dir_: Path, args: argparse.Namespace, env: dict
+) -> tuple[bool, str]:
+    """Apply raw-SQL migrations preserving statement order, stopping on the
+    first failure.
+
+    Statements are executed in their original file/statement order. A run of
+    transactional statements is applied as one ``--single-transaction`` batch
+    (ON_ERROR_STOP rolls it back atomically). A statement using
+    ``CREATE INDEX CONCURRENTLY`` cannot run inside a transaction, so the
+    pending transactional segment is flushed first, the concurrent statement is
+    applied individually (its own psql call), then a new transactional segment
+    begins — preserving order so a later statement can depend on a concurrently
+    created index. Execution stops at the first failing segment or concurrent
+    statement; later statements are not applied.
+
+    Discovery matches tool detection (recursive over ``migrations/`` and
+    ``drizzle/``, or a single ``--migration``), so nested/drizzle migrations
+    are applied rather than silently skipped.
+    """
+    import tempfile
+
+    from .detect import sql_migration_files
+    from .migration_sql import _split_sql_statements
+
+    if getattr(args, "migration", None):
+        files = [Path(args.migration)]
+    else:
+        files = sql_migration_files(dir_)
+    if not files:
+        raise SystemExit(
+            "verify: no SQL migrations found under migrations/ or drizzle/; "
+            "pass --migration <file> or create migrations/*.sql"
+        )
+
+    batch = "\n".join(f.read_text(encoding="utf-8") for f in files)
+    ok, out = True, ""
+    seg: list[str] = []          # current transactional segment (original order)
+    conc_count = 0
+
+    def _flush() -> None:
+        """Apply the accumulated transactional segment in one transaction."""
+        nonlocal ok, out
+        if not seg:
+            return
+        joined = ";\n".join(seg) + ";\n"
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".sql", delete=False, dir=str(dir_)
+        ) as tf:
+            tf.write(joined)
+            batch_path = tf.name
+        try:
+            r = _run(
+                ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction",
+                 "-f", batch_path, args.dsn],
+                dir_, env,
+            )
+            if r.returncode != 0:
+                ok = False
+            out += (r.stdout + r.stderr)[-2000:]
+        finally:
+            Path(batch_path).unlink(missing_ok=True)
+        seg.clear()
+
+    for _lineno, stmt in _split_sql_statements(batch):
+        if not ok:
+            break
+        # an actual CREATE [UNIQUE] INDEX CONCURRENTLY runs outside a
+        # transaction; flush the pending transactional segment first to
+        # preserve order. "concurrently" inside a string/dollar-body does not
+        # match (the statement verb is not a concurrent index).
+        if re.match(r"create\s+(?:unique\s+)?index\s+concurrently\b", stmt.strip(), re.I):
+            _flush()
+            if not ok:
+                break
+            r = _run(
+                ["psql", "-v", "ON_ERROR_STOP=1", "-c", stmt, args.dsn],
+                dir_, env,
+            )
+            if r.returncode != 0:
+                ok = False
+            out += (r.stdout + r.stderr)[-1000:]
+            conc_count += 1
+        else:
+            seg.append(stmt)
+    if ok:
+        _flush()                 # final transactional segment
+    if conc_count:
+        out += (
+            f"\n[applied {conc_count} CONCURRENTLY statement(s) outside the "
+            f"transaction]\n"
+        )
+    return ok, out
+
+
+def _run_ts_tests(dir_: Path, env: dict) -> tuple[bool, str]:
+    """Run `npm test` if package.json defines a test script; else data parity is
+    the sole invariant (TypeScript apps have no pytest)."""
+    pkg = dir_ / "package.json"
+    if pkg.exists():
+        try:
+            scripts = json.loads(pkg.read_text()).get("scripts", {})
+        except (OSError, ValueError):
+            scripts = {}
+        if scripts.get("test"):
+            r = _run(["npm", "test", "--silent"], dir_, env)
+            return r.returncode == 0, (r.stdout + r.stderr)[-3000:]
+    return True, "(no test script; data parity is the sole invariant)"
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
     env = {**os.environ, "DATABASE_URL": args.dsn}
-    # The app's tests force a separate test database; derive it from the DSN
-    # so the sandbox flow needs no extra env (conftest's :5434 default only
-    # matches the local host setup).
-    env.setdefault("TEST_DATABASE_URL", _test_dsn(args.dsn))
     dir_ = Path(args.dir)
+    tool = args.tool if args.tool != "auto" else detect_migration_tool(str(dir_))
+    if tool == "none":
+        print(
+            "verify: no recognized migration tool (alembic.ini or *.sql under "
+            "migrations/drizzle/) — cannot apply or verify the migration",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    # Tests must run against the same DB the migration was applied to.
+    # The Python/alembic conftest manages its own separate test DB ('_test'
+    # suffix); the SQL/TS path applies migrations to args.dsn and must test
+    # there too, so force TEST_DATABASE_URL = args.dsn.
+    if tool == "sql":
+        env["TEST_DATABASE_URL"] = args.dsn
+    else:
+        env.setdefault("TEST_DATABASE_URL", _test_dsn(args.dsn))
+    # --- apply the migration ---
+    if tool == "sql":
+        apply_ok, apply_out = _apply_sql_migrations(dir_, args, env)
+    else:  # alembic (default)
+        alembic = _run([_tool("alembic"), "upgrade", "head"], dir_, env)
+        apply_ok = alembic.returncode == 0
+        apply_out = (alembic.stdout + alembic.stderr)[-2000:]
 
-    alembic = _run([_tool("alembic"), "upgrade", "head"], dir_, env)
-
+    # --- schema diff + data parity (language-agnostic) ---
     with connect(args.dsn) as conn:
         after = snapshot(conn)
         before = DBSnapshot.from_dict(json.loads(Path(args.baseline).read_text()))
@@ -176,8 +319,15 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 if isinstance(v, bool)
             )
 
-    pytest = _run([_tool("pytest"), "-q"], dir_, env)
+    # --- contract tests ---
+    if tool == "sql":
+        test_ok, test_out = _run_ts_tests(dir_, env)
+    else:
+        res = _run([_tool("pytest"), "-q"], dir_, env)
+        test_ok = res.returncode == 0
+        test_out = (res.stdout + res.stderr)[-3000:]
 
+    # --- query plans (language-agnostic) ---
     before_explain: dict[str, float] = {}
     if args.explain_before and Path(args.explain_before).exists():
         before_explain = json.loads(Path(args.explain_before).read_text())
@@ -192,10 +342,11 @@ def cmd_verify(args: argparse.Namespace) -> None:
         )
 
     result = {
-        "alembic_ok": alembic.returncode == 0,
-        "alembic_output": (alembic.stdout + alembic.stderr)[-2000:],
-        "pytest_ok": pytest.returncode == 0,
-        "pytest_output": (pytest.stdout + pytest.stderr)[-3000:],
+        "tool": "sql" if tool == "sql" else "alembic",
+        "apply_ok": apply_ok,
+        "apply_output": apply_out,
+        "test_ok": test_ok,
+        "test_output": test_out,
         "parity_ok": parity_ok,
         "parity_output": parity_out[-2000:],
         "diff": diff,
@@ -209,9 +360,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
         json.dumps(render_json(result), indent=2) + "\n"
     )
     print(report)
-    sys.exit(
-        0 if (result["alembic_ok"] and result["pytest_ok"] and parity_ok is not False) else 1
-    )
+    sys.exit(0 if (apply_ok and test_ok and parity_ok is not False) else 1)
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
@@ -257,6 +406,7 @@ def main() -> None:
     s = sub.add_parser("facts")
     s.add_argument("--app", required=True)
     s.add_argument("--out", required=True)
+    s.add_argument("--lang", choices=["auto", "python", "ts"], default="auto")
     s.set_defaults(fn=cmd_facts)
 
     s = sub.add_parser("graph")
@@ -298,6 +448,8 @@ def main() -> None:
     s.add_argument("--queries", required=True)
     s.add_argument("--explain-before")
     s.add_argument("--out", required=True)
+    s.add_argument("--tool", choices=["auto", "alembic", "sql"], default="auto")
+    s.add_argument("--migration", help="single SQL migration file (tool=sql)")
     s.set_defaults(fn=cmd_verify)
 
     s = sub.add_parser("bench")
