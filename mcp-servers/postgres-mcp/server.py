@@ -416,10 +416,19 @@ def execute_migration(sql: str, phase: str | None = None) -> str:
                 if m:
                     target = m.group(1).lower()
                     if target != "alembic_version" and target in pre:
-                        raise ValueError(
-                            f"backfill target {target!r} already exists — INSERT..SELECT "
-                            "may only populate tables created by this migration"
-                        )
+                        # A guarded reconciliation (WHERE NOT EXISTS) may
+                        # backfill stragglers into a table that already
+                        # exists (created in a prior expand phase) — it is
+                        # idempotent and cannot duplicate rows. A plain
+                        # INSERT..SELECT into an existing table is rejected
+                        # to prevent silent data duplication.
+                        if not re.search(r"\bWHERE\s+NOT\s+EXISTS\b", clean, re.I):
+                            raise ValueError(
+                                f"backfill target {target!r} already exists — "
+                                "INSERT..SELECT may only populate tables created "
+                                "by this migration, or use WHERE NOT EXISTS for "
+                                "reconciliation"
+                            )
                 conn.execute(clean)
             conn.commit()
         except Exception as exc:

@@ -52,7 +52,11 @@ def test_contract_gate_safe_when_no_code_reads_column():
     assert r["blockers"] == []
 
 
-def test_contract_gate_unknown_column_is_safe():
+def test_contract_gate_unknown_column_is_blocked():
+    # An unknown/typo column must BLOCK, not silently pass as SAFE — the
+    # gate cannot prove a column it cannot see is safe to drop.
     g = _graph_without_access()
     r = impacted_by_columns(g, ["users.nonexistent"])
-    assert r["safe"] is True  # no node -> no blockers
+    assert r["safe"] is False
+    assert r["absent"] == ["users.nonexistent"]
+    assert any(b["kind"] == "absent" for b in r["blockers"])
