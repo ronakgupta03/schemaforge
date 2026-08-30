@@ -26,22 +26,25 @@ IPv4 listener). The CLI patches the served frontend automatically on
 every launch so impact-graph mermaid blocks render inside chat
 (`scripts/patch-trueforge-mermaid.py`, idempotent).
 
-The SchemaForge fork of the TrueForge UI additionally ships evidence tabs —
-**Impact / Report / Changes / Verification / Activity** — that load the
-session's artifacts (`graph.mmd`, `report.md`, `migration.sql`,
-`diff.patch`, `verify.json`) from the sandbox, plus a **SchemaForge**
-section in Settings. The published package boots the stock TrueForge UI;
-evidence artifacts are still downloadable from the sandbox per session.
+Evidence artifacts (`graph.mmd`, `report.md`, `migration.sql`,
+`diff.patch`, `verify.json`) are saved per session in the sandbox and
+downloadable from chat. The development workspace's forked TrueForge UI
+(`trueforge-ui-fork`) additionally adds evidence tabs —
+**Impact / Report / Changes / Verification / Activity** — and a
+**SchemaForge** section in Settings; the published package does not bundle
+that fork.
 
 ### Configuration via the Settings Tab
 
-Open **Settings** in the TrueForge UI to configure your environment:
+Open **Settings** in the TrueForge UI to configure your environment (the
+stock UI ships four sections; the development-workspace fork adds the
+SchemaForge section):
 
 1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
 2. **Connectors**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
-3. **SchemaForge**: Production PostgreSQL DSN, GitHub personal access token + default repo, config token, and an **Apply Agent** button that re-generates the agent manifest.
-4. **Skills**: Manage the `schemaforge-migration` git skill.
-5. **Sandbox providers**: Configure the Daytona sandbox used for isolated migration execution and parity verification.
+3. **Skills**: Manage the `schemaforge-migration` git skill.
+4. **Sandbox providers**: Configure the Daytona sandbox used for isolated migration execution and parity verification.
+5. **SchemaForge** *(dev-workspace fork only)*: Production PostgreSQL DSN, GitHub personal access token + default repo, config token, and an **Apply Agent** button that re-generates the agent manifest.
 
 Unconfigured services are simply omitted: without a Postgres connector, the
 agent skips prod introspection and apply; without a GitHub connector, it

@@ -122,19 +122,25 @@ and opens the TrueForge chat UI at http://[::1]:8790. Running services on the
 default ports are reused instead of restarted. First run creates a Python
 venv and installs the engine + MCP dependencies.
 
-The UI is the TrueForge chat. This workspace's forked TrueForge UI adds
-SchemaForge evidence tabs (Impact / Report / Changes / Verification /
-Activity) plus a SchemaForge Settings section; the published package boots
-the stock TrueForge UI (mermaid chat graphs patched automatically, evidence
-artifacts still downloadable from the sandbox per session). **Configure
-everything in the UI — nothing is hardcoded.** The Settings tab has five
-sections:
+The UI is the TrueForge chat at http://[::1]:8790. The CLI patches the
+served frontend on every launch so impact-graph mermaid blocks render
+inside chat; evidence artifacts (`graph.mmd`, `report.md`, `migration.sql`,
+`diff.patch`, `verify.json`) are saved per session in the sandbox and
+downloadable from chat. **Configure everything in the UI — nothing is
+hardcoded.** The stock TrueForge Settings tab has four sections:
 
 1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
 2. **Connectors**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
-3. **SchemaForge**: Set the production PostgreSQL connection (database DSN / URL), the GitHub connector (token + default repo), and the config token — with an **Apply Agent** button that re-generates the agent manifest.
-4. **Skills**: Manage the `schemaforge-migration` git skill.
-5. **Sandbox providers**: Configure the Daytona sandbox environment used for isolated migration execution and verification.
+3. **Skills**: Manage the `schemaforge-migration` git skill.
+4. **Sandbox providers**: Configure the Daytona sandbox environment used for isolated migration execution and verification.
+
+The development workspace additionally runs a forked TrueForge UI
+(`trueforge-ui-fork`) that adds SchemaForge evidence tabs
+(Impact / Report / Changes / Verification / Activity) and a SchemaForge
+Settings section — production PostgreSQL DSN, GitHub token + default repo,
+config token, and an **Apply Agent** button that re-generates the agent
+manifest. The published package does not bundle that fork; artifacts are
+still downloadable from chat in the stock UI.
 
 Unconfigured services are simply omitted: without a Postgres connector, the agent skips prod introspection and apply; without a GitHub connector, it saves `out/diff.patch` locally instead of opening a PR. Nothing crashes.
 
@@ -162,7 +168,7 @@ First run creates the venv (`~/.schemaforge/.sfenv`) and installs the engine
 | `postgres-mcp` | 8001  | prod-Postgres MCP (config endpoint on 9001)  |
 | `github-mcp`   | 8002  | GitHub MCP (config endpoint on 9002)         |
 | `sf-registry`  | 9010  | SchemaForge config/settings backend          |
-| TrueForge      | 8790  | `npx @truefoundry/trueforge`, local SQLite mode — forked UI with SchemaForge tabs (opens in browser) |
+| TrueForge      | 8790  | `npx @truefoundry/trueforge`, local SQLite mode — chat UI (SchemaForge evidence tabs in the dev-workspace fork) |
 | local mirror   | 5173  | proxies `/api/sf` config endpoints + redirects to the TrueForge UI |
 
 The agent is registered automatically (apply-agent). Configure everything in
