@@ -31,12 +31,12 @@ export function VerificationPanel({ verify }: { verify: string | null }) {
   const v = parseVerify(verify);
   if (!v)
     return (
-      <div className="p-4 text-sm" style={{ color: "var(--sf-muted)" }}>
+      <div className="text-sm" style={{ color: "var(--sf-muted)" }}>
         Waiting for verify.json…
       </div>
     );
   return (
-    <div className="space-y-2 p-4">
+    <div className="space-y-2">
       <Row label={migrationLabel(v)} ok={v.apply_ok} output={v.apply_output} />
       <Row label="Application tests" ok={v.test_ok} output={v.test_output} />
       <Row label="Data parity" ok={v.parity_ok} output={v.parity_output} />

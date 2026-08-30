@@ -40,7 +40,9 @@ export async function listTurns(fetchFn: FetchFn, sessionId: string): Promise<Tu
 }
 
 export async function listEvents(fetchFn: FetchFn, sessionId: string, turnId: string): Promise<ApiEvent[]> {
-  return getJson<ApiEvent[]>(fetchFn, `/api/v1/sessions/${sessionId}/turns/${turnId}/events`);
+  const body = await getJson<ApiEvent[] | { data: ApiEvent[]; pagination?: unknown }>(fetchFn, `/api/v1/sessions/${sessionId}/turns/${turnId}/events`);
+  if (Array.isArray(body)) return body;
+  return (body as { data?: ApiEvent[] }).data ?? [];
 }
 
 export async function downloadArtifact(fetchFn: FetchFn, sessionId: string, turnId: string, path: string): Promise<ArtifactResult> {

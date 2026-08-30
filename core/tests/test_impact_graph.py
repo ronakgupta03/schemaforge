@@ -85,7 +85,20 @@ def test_mermaid_renders_subgraphs():
     assert mmd.startswith("flowchart LR")
     assert "subgraph table" in mmd
     assert "subgraph endpoint" in mmd
+    assert "subgraph attr" not in mmd
+    assert "subgraph rawsql" not in mmd
     assert 'label' not in mmd  # sanity: no leaked python reprs
+
+
+def test_mermaid_display_projection_keeps_endpoints_linked():
+    """An endpoint that reaches a model only through an attr helper must still
+    appear in the bounded display graph connected to that model/table."""
+    snap, facts = _fixture()
+    g = build(snap, facts)
+    mmd = to_mermaid(g)
+    # The fixture has an attr access in a helper called by the endpoint, so the
+    # collapsed graph should contain a synthesized endpoint -> model edge.
+    assert "depends_on" in mmd
 
 
 def test_endpoint_reaches_helper_attr_access():

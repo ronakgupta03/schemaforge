@@ -226,11 +226,36 @@ def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
         "absent": absent_cols,
     }
 def to_mermaid(g: ImpactGraph) -> str:
+    """Bounded display projection: tables, columns, models, endpoints only.
+
+    Internal attr / raw-SQL nodes are dropped from the rendered graph (they
+    still live in graph.json), and synthesized edges collapse the reachability
+    through them so endpoints remain linked to the models/tables they depend on.
+    """
+    keep = {"table", "column", "model", "endpoint"}
+    kept = {nid for nid, n in g.nodes.items() if n.kind in keep}
+
+    # Synthesize collapse edges: endpoint -> model (via attr) and endpoint -> table (via raw SQL).
+    synth_endpoint_model: dict[tuple[str, str], str] = {}
+    synth_endpoint_table: dict[tuple[str, str], str] = {}
+    for e in g.edges:
+        if e.kind != "executes" or e.src not in kept or e.dst not in g.nodes:
+            continue
+        dst = g.nodes[e.dst]
+        if dst.kind == "attr":
+            for me in g.edges:
+                if me.kind == "accessed_via" and me.dst == e.dst and me.src in kept:
+                    synth_endpoint_model[(e.src, me.src)] = "depends_on"
+        elif dst.kind == "rawsql":
+            for re in g.edges:
+                if re.kind == "queries" and re.src == e.dst and re.dst in kept:
+                    synth_endpoint_table[(e.src, re.dst)] = "queries"
+
     lines = ["flowchart LR"]
     by_kind: dict[str, list[ImpactNode]] = defaultdict(list)
-    for n in g.nodes.values():
-        by_kind[n.kind].append(n)
-    for kind in ("table", "column", "model", "attr", "rawsql", "endpoint"):
+    for nid in kept:
+        by_kind[g.nodes[nid].kind].append(g.nodes[nid])
+    for kind in ("table", "column", "model", "endpoint"):
         nodes = by_kind.get(kind)
         if not nodes:
             continue
@@ -238,6 +263,16 @@ def to_mermaid(g: ImpactGraph) -> str:
         for n in sorted(nodes, key=lambda x: x.id):
             lines.append(f"        {n.id}[\"{n.label}\"]")
         lines.append("    end")
+
+    shown: set[tuple[str, str, str]] = set()
     for e in g.edges:
-        lines.append(f"    {e.src} -->|{e.kind}| {e.dst}")
+        if e.src in kept and e.dst in kept:
+            shown.add((e.src, e.dst, e.kind))
+    for (src, dst), kind in synth_endpoint_model.items():
+        shown.add((src, dst, kind))
+    for (src, dst), kind in synth_endpoint_table.items():
+        shown.add((src, dst, kind))
+
+    for src, dst, kind in sorted(shown):
+        lines.append(f"    {src} -->|{kind}| {dst}")
     return "\n".join(lines)

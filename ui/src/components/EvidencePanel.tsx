@@ -42,23 +42,30 @@ export function EvidencePanel() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2 text-xs" style={{ borderColor: "var(--sf-border)", color: "var(--sf-muted)" }}>
-        <span className="font-semibold">EVIDENCE</span>
+        <span className="font-semibold tracking-wide">EVIDENCE</span>
         {ev.approvalPending && <span className="animate-pulse font-semibold" style={{ color: "#fbbf24" }}>⚠ review before approving</span>}
-        {!ev.approvalPending && <span>{ev.phase === "running" ? "agent working…" : ev.phase}</span>}
+        {!ev.approvalPending && <span className="capitalize">{ev.phase === "running" ? "agent working…" : ev.phase}</span>}
       </div>
-      <div className="flex gap-1 border-b px-2 py-1" style={{ borderColor: "var(--sf-border)" }}>
-        {TABS.map((t) => (
-          <button key={t} onClick={() => select(t)} className={`rounded px-2 py-1 text-xs ${tab === t ? "" : "opacity-70"}`}
-            style={{
-              background: tab === t ? "var(--sf-panel)" : "transparent",
-              color: "var(--sf-text)",
-              boxShadow: unReviewed.includes(t) ? "0 0 0 1px #fbbf24" : undefined,
-            }}>
-            {t}{unReviewed.includes(t) ? " ●" : ""}
-          </button>
-        ))}
+      <div className="flex border-b" style={{ borderColor: "var(--sf-border)" }}>
+        {TABS.map((t) => {
+          const active = tab === t;
+          const unread = unReviewed.includes(t);
+          return (
+            <button
+              key={t}
+              onClick={() => select(t)}
+              className={`relative px-3 py-2 text-xs font-medium transition-colors ${active ? "opacity-100" : "opacity-70 hover:opacity-100"}`}
+              style={{ color: unread ? "#fbbf24" : "var(--sf-text)" }}
+            >
+              {t}{unread ? " ●" : ""}
+              {active && (
+                <span className="absolute bottom-0 left-1 right-1 h-0.5 rounded-t" style={{ background: "var(--sf-accent)" }} />
+              )}
+            </button>
+          );
+        })}
       </div>
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div className="flex-1 min-h-0 overflow-auto p-3">
         {tab === "Impact" && <ImpactGraph mmd={ev.artifacts.graph ?? null} />}
         {tab === "Report" && <SafetyReport reportMd={ev.artifacts.report ?? null} verify={ev.artifacts.verify ?? null} />}
         {tab === "Changes" && <ChangesPanel sql={ev.artifacts.sql ?? null} diff={ev.artifacts.diff ?? null} />}

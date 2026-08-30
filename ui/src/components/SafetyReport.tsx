@@ -13,7 +13,7 @@ function Badge({ ok, label }: { ok: boolean | null; label: string }) {
 export function SafetyReport({ reportMd, verify }: { reportMd: string | null; verify: string | null }) {
   const v = parseVerify(verify);
   return (
-    <div className="space-y-3 p-4">
+    <div className="space-y-3">
       {v && <div className="flex flex-wrap gap-2">{badges(v).map((b) => <Badge key={b.label} {...b} />)}</div>}
       {reportMd ? (
         <div className="prose prose-sm max-w-none" style={{ color: "var(--sf-text)" }}>

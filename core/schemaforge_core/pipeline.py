@@ -61,8 +61,11 @@ def cmd_graph(args: argparse.Namespace) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(g.to_dict(), indent=2))
     if args.mermaid:
-        Path(args.mermaid).write_text(to_mermaid(g))
-        print(f"graph -> {out} + {args.mermaid} ({len(g.nodes)} nodes, {len(g.edges)} edges)")
+        mmd = to_mermaid(g)
+        Path(args.mermaid).write_text(mmd)
+        display_edges = mmd.count(" -->|")
+        display_nodes = len({n for n in g.nodes.values() if n.kind in {"table", "column", "model", "endpoint"}})
+        print(f"graph -> {out} + {args.mermaid} ({len(g.nodes)} nodes, {len(g.edges)} edges; display {display_nodes} nodes, {display_edges} edges)")
     else:
         print(f"graph -> {out} ({len(g.nodes)} nodes, {len(g.edges)} edges)")
 
