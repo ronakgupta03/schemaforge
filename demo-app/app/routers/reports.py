@@ -18,6 +18,10 @@ def get_db():
 @router.get("/addresses")
 def user_addresses(db: Session = Depends(get_db)):
     rows = db.execute(
-        text("SELECT u.name, u.address FROM users u ORDER BY u.id LIMIT 20")
+        text(
+            "SELECT u.name, p.address "
+            "FROM users u JOIN user_profiles p ON p.user_id = u.id "
+            "ORDER BY u.id LIMIT 20"
+        )
     ).fetchall()
     return [{"name": r.name, "address": r.address} for r in rows]
