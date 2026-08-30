@@ -64,7 +64,7 @@ def cmd_graph(args: argparse.Namespace) -> None:
         mmd = to_mermaid(g)
         Path(args.mermaid).write_text(mmd)
         display_edges = mmd.count(" -->|")
-        display_nodes = len({n for n in g.nodes.values() if n.kind in {"table", "column", "model", "endpoint"}})
+        display_nodes = sum(1 for n in g.nodes.values() if n.kind in {"table", "model", "endpoint"})
         print(f"graph -> {out} + {args.mermaid} ({len(g.nodes)} nodes, {len(g.edges)} edges; display {display_nodes} nodes, {display_edges} edges)")
     else:
         print(f"graph -> {out} ({len(g.nodes)} nodes, {len(g.edges)} edges)")

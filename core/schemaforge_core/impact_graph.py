@@ -226,52 +226,90 @@ def impacted_by_columns(g: ImpactGraph, columns: list[str]) -> dict:
         "absent": absent_cols,
     }
 def to_mermaid(g: ImpactGraph) -> str:
-    """Bounded display projection: tables, columns, models, endpoints only.
+    """Bounded display projection: tables, models, endpoint route groups.
 
-    Internal attr / raw-SQL nodes are dropped from the rendered graph (they
-    still live in graph.json), and synthesized edges collapse the reachability
-    through them so endpoints remain linked to the models/tables they depend on.
+    Column nodes and individual endpoint nodes are dropped from the
+    rendered graph (they dominate node counts on real schemas and still
+    live in graph.json). Endpoints are aggregated by API route prefix
+    (e.g. ``api/auth — 12 endpoints``) and edges are collapsed and
+    deduplicated: group -> table (via raw SQL) and group -> model (via
+    attr access, only when the group has no table edge). The result stays
+    small enough to render in the Impact tab before the approval gate.
     """
-    keep = {"table", "column", "model", "endpoint"}
+    keep = {"table", "model", "endpoint"}
     kept = {nid for nid, n in g.nodes.items() if n.kind in keep}
+    endpoints = {nid for nid in kept if g.nodes[nid].kind == "endpoint"}
 
-    # Synthesize collapse edges: endpoint -> model (via attr) and endpoint -> table (via raw SQL).
-    synth_endpoint_model: dict[tuple[str, str], str] = {}
-    synth_endpoint_table: dict[tuple[str, str], str] = {}
+    def endpoint_group(label: str) -> str:
+        # "GET /api/auth/check-email/:email" -> "api/auth"
+        parts = label.split()
+        path = parts[-1] if parts else label
+        segs = [s for s in path.split("/") if s]
+        if not segs:
+            return label
+        return "/".join(segs[:2])
+
+    # Collapse endpoint reachability: endpoint -> table (via raw SQL) and
+    # endpoint -> model (via attr).
+    attr_model: dict[str, str] = {}
+    rawsql_tables: dict[str, set[str]] = defaultdict(set)
     for e in g.edges:
-        if e.kind != "executes" or e.src not in kept or e.dst not in g.nodes:
+        if e.kind == "accessed_via" and e.src in kept:
+            attr_model[e.dst] = e.src
+        elif e.kind == "queries" and e.dst in kept:
+            rawsql_tables[e.src].add(e.dst)
+
+    groups: dict[str, dict[str, set[str]]] = defaultdict(lambda: {"tables": set(), "models": set()})
+    endpoint_table: dict[str, set[str]] = defaultdict(set)
+    for e in g.edges:
+        if e.kind != "executes" or e.src not in endpoints:
             continue
-        dst = g.nodes[e.dst]
+        dst = g.nodes.get(e.dst)
+        if dst is None:
+            continue
+        group = endpoint_group(g.nodes[e.src].label)
         if dst.kind == "attr":
-            for me in g.edges:
-                if me.kind == "accessed_via" and me.dst == e.dst and me.src in kept:
-                    synth_endpoint_model[(e.src, me.src)] = "depends_on"
+            model = attr_model.get(e.dst)
+            if model is not None:
+                groups[group]["models"].add(model)
         elif dst.kind == "rawsql":
-            for re in g.edges:
-                if re.kind == "queries" and re.src == e.dst and re.dst in kept:
-                    synth_endpoint_table[(e.src, re.dst)] = "queries"
+            for tid in rawsql_tables.get(e.dst, ()):
+                groups[group]["tables"].add(tid)
+                endpoint_table[e.src].add(tid)
 
     lines = ["flowchart LR"]
     by_kind: dict[str, list[ImpactNode]] = defaultdict(list)
     for nid in kept:
         by_kind[g.nodes[nid].kind].append(g.nodes[nid])
-    for kind in ("table", "column", "model", "endpoint"):
+    for kind in ("table", "model"):
         nodes = by_kind.get(kind)
         if not nodes:
             continue
         lines.append(f"    subgraph {kind}")
         for n in sorted(nodes, key=lambda x: x.id):
-            lines.append(f"        {n.id}[\"{n.label}\"]")
+            lines.append(f'        {n.id}["{n.label}"]')
         lines.append("    end")
+
+    endpoint_counts: dict[str, int] = defaultdict(int)
+    for nid in endpoints:
+        endpoint_counts[endpoint_group(g.nodes[nid].label)] += 1
+    lines.append("    subgraph endpoint")
+    for group in sorted(groups):
+        nid = f"epg_{_mid(group)}"
+        lines.append(f'        {nid}["{group} — {endpoint_counts[group]} endpoints"]')
+    lines.append("    end")
 
     shown: set[tuple[str, str, str]] = set()
     for e in g.edges:
-        if e.src in kept and e.dst in kept:
+        if e.kind == "maps_to" and e.src in kept and e.dst in kept:
             shown.add((e.src, e.dst, e.kind))
-    for (src, dst), kind in synth_endpoint_model.items():
-        shown.add((src, dst, kind))
-    for (src, dst), kind in synth_endpoint_table.items():
-        shown.add((src, dst, kind))
+    for group, acc in groups.items():
+        nid = f"epg_{_mid(group)}"
+        for tid in acc["tables"]:
+            shown.add((nid, tid, "queries"))
+        if not acc["tables"]:
+            for mid in acc["models"]:
+                shown.add((nid, mid, "uses"))
 
     for src, dst, kind in sorted(shown):
         lines.append(f"    {src} -->|{kind}| {dst}")
