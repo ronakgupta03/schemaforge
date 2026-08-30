@@ -16,13 +16,6 @@ const ROOT = existsSync(join(PKG_ROOT, "core"))
   : existsSync(join(REPO_ROOT, "core"))
   ? REPO_ROOT
   : PKG_ROOT;
-const DIST = existsSync(join(PKG_ROOT, "ui-dist"))
-  ? join(PKG_ROOT, "ui-dist")
-  : existsSync(join(REPO_ROOT, "packages", "cli", "ui-dist"))
-  ? join(REPO_ROOT, "packages", "cli", "ui-dist")
-  : existsSync(join(REPO_ROOT, "ui", "dist"))
-  ? join(REPO_ROOT, "ui", "dist")
-  : join(PKG_ROOT, "ui-dist");
 
 const instructionsPath = existsSync(join(ROOT, "agent", "instructions.md"))
   ? join(ROOT, "agent", "instructions.md")
@@ -465,7 +458,7 @@ async function bootstrapApplyAgent(regPort, maxWaitMs = 15000) {
   }
 }
 
-// 5. static UI + proxy
+// 5. local mirror: config proxy + redirect to the TrueForge UI
 function getProxyTarget(urlPath) {
   const [pathname, search = ""] = urlPath.split("?");
   const query = search ? `?${search}` : "";
@@ -523,22 +516,6 @@ function getProxyTarget(urlPath) {
   return null;
 }
 
-const MIME = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".ttf": "font/ttf",
-  ".map": "application/json",
-  ".txt": "text/plain",
-};
 function isCsrfForbidden(req, servingPort) {
   const secFetchSite = req.headers["sec-fetch-site"];
   if (secFetchSite === "cross-site") {
@@ -630,8 +607,7 @@ server = createServer((req, res) => {
     return;
   }
 
-  // The evidence UI is intentionally off for now — route everything else to the
-  // forked/patched TrueForge UI served directly at :8790.
+  // Everything else redirects to the TrueForge UI served directly at :8790.
   const tfUrlHost = tfProxyHost.includes(":") && !tfProxyHost.startsWith("[")
     ? `[${tfProxyHost}]`
     : tfProxyHost;
@@ -645,7 +621,7 @@ server.listen(uiPort, "127.0.0.1", () => {
     ? `[${tfProxyHost}]`
     : tfProxyHost;
   const tfUrl = `http://${tfUrlHost}:${tfPort}`;
-  console.log(`[schemaforge] TrueForge UI at ${tfUrl}, local mirror at http://localhost:${uiPort} (registry ${regPort}, mcp ${pgTransportPort}/${ghTransportPort})`);
+  console.log(`[schemaforge] TrueForge UI at ${tfUrl} (local mirror http://localhost:${uiPort}, registry ${regPort}, mcp ${pgTransportPort}/${ghTransportPort})`);
   bootstrapApplyAgent(regPort).catch(() => {});
   if (!noOpen) {
     if (process.platform === "darwin") {

@@ -25,28 +25,7 @@ const filterIgnored = (src) => {
 
 console.log("[prepack] staging runtime directories into packages/cli...");
 
-// 1. Ensure UI build exists and copy to ui-dist
-const repoUiDist = join(REPO_ROOT, "ui", "dist");
-if (!existsSync(repoUiDist)) {
-  console.log("[prepack] building ui...");
-  try {
-    execSync("npm run build", { cwd: join(REPO_ROOT, "ui"), stdio: "inherit" });
-  } catch (err) {
-    console.error("[prepack] failed to build ui:", err.message);
-    process.exit(1);
-  }
-}
-
-if (!existsSync(repoUiDist)) {
-  console.error(`[prepack] ui build missing at ${repoUiDist}`);
-  process.exit(1);
-}
-
-const pkgUiDist = join(PKG_ROOT, "ui-dist");
-rmSync(pkgUiDist, { recursive: true, force: true });
-cpSync(repoUiDist, pkgUiDist, { recursive: true });
-
-// 2. Copy core, mcp-servers, agent, skills
+// 1. Copy core, mcp-servers, agent, skills
 const dirsToCopy = ["core", "mcp-servers", "agent", "skills"];
 for (const dir of dirsToCopy) {
   const src = join(REPO_ROOT, dir);

@@ -49,7 +49,7 @@ here is tied to a specific codebase.
 6. **Session-scoped artifacts.** Use `/workspace/out/${SF_SESSION_ID}/`
    for all generated artifacts when that variable is set; otherwise fall
    back to `/workspace/out/`. This keeps each TrueForge chat session's files
-   separate and loadable in the Evidence UI.
+   separate and loadable in the TrueForge UI evidence tabs.
 7. **Two-phase.** Never apply a contract migration in the same turn as an
    expand migration. Expand is additive (safe under live traffic); contract
    removes schema and needs the dual-write app deployed first. After the

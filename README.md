@@ -118,24 +118,28 @@ explains — it never guesses about code or schema.
 npx @schemaforge/schemaforge
 ```
 
-Boots the full local stack (TrueForge + postgres-mcp + github-mcp + registry
- Evidence UI) and opens the browser at http://localhost:5173. Running
-services on the default ports are reused instead of restarted. First run
-creates a Python venv and installs the engine + MCP dependencies.
+Boots the full local stack (TrueForge + postgres-mcp + github-mcp + registry)
+and opens the TrueForge chat UI at http://[::1]:8790. Running services on the
+default ports are reused instead of restarted. First run creates a Python
+venv and installs the engine + MCP dependencies.
 
-**Configure everything in the UI — nothing is hardcoded.** The Settings tab
-has five sections:
+The UI is the TrueForge chat with SchemaForge evidence tabs
+(Impact / Report / Changes / Verification / Activity) plus a SchemaForge
+Settings section. **Configure everything in the UI — nothing is hardcoded.**
+The Settings tab has five sections:
 
 1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
-2. **MCP Servers**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
-3. **Connectors**: Set up the production PostgreSQL connection (database DSN / URL) and the GitHub connector with your token and repository.
-4. **Sandbox**: Enable or disable the Daytona sandbox environment used for isolated migration execution and verification.
-5. **Apply Agent**: Re-generate the agent manifest and apply it to TrueForge. Unconfigured services are simply omitted: without a Postgres connector, the agent skips prod introspection and apply; without a GitHub connector, it saves `out/diff.patch` locally instead of opening a PR. Nothing crashes.
+2. **Connectors**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
+3. **SchemaForge**: Set the production PostgreSQL connection (database DSN / URL), the GitHub connector (token + default repo), and the config token — with an **Apply Agent** button that re-generates the agent manifest.
+4. **Skills**: Manage the `schemaforge-migration` git skill.
+5. **Sandbox providers**: Configure the Daytona sandbox environment used for isolated migration execution and verification.
+
+Unconfigured services are simply omitted: without a Postgres connector, the agent skips prod introspection and apply; without a GitHub connector, it saves `out/diff.patch` locally instead of opening a PR. Nothing crashes.
 
 ## Run it — full local stack (all components, dev setup)
 
 Everything boots from the CLI — venv, MCP servers, registry, TrueForge, and
-the Evidence UI — and already-running services on the default ports are
+the local mirror — and already-running services on the default ports are
 reused instead of restarted:
 
 ```bash
@@ -155,9 +159,9 @@ First run creates the venv (`~/.schemaforge/.sfenv`) and installs the engine
 | -------------- | ----- | -------------------------------------------- |
 | `postgres-mcp` | 8001  | prod-Postgres MCP (config endpoint on 9001)  |
 | `github-mcp`   | 8002  | GitHub MCP (config endpoint on 9002)         |
-| `sf-registry`  | 9010  | Settings-tab backend                         |
-| TrueForge      | 8790  | `npx @truefoundry/trueforge`, local SQLite mode |
-| Evidence UI    | 5173  | Settings tab + agent chat (opens in browser)  |
+| `sf-registry`  | 9010  | SchemaForge config/settings backend          |
+| TrueForge      | 8790  | `npx @truefoundry/trueforge`, local SQLite mode — forked UI with SchemaForge tabs (opens in browser) |
+| local mirror   | 5173  | proxies `/api/sf` config endpoints + redirects to the TrueForge UI |
 
 The agent is registered automatically (apply-agent). Configure everything in
 the Settings tab: Models → Connectors (prod Postgres DSN + GitHub
@@ -175,7 +179,7 @@ docker compose -f demo-app/prod-postgres/docker-compose.yml up -d
 bash demo-app/seed_prod.sh
 ```
 
-Then chat with `schemaforge` in the Evidence UI and prompt, e.g.: "Split the
+Then chat with `schemaforge` in the TrueForge UI and prompt, e.g.: "Split the
 users table into users and user_profiles. user_profiles gets id, user_id
 (1:1 FK), address, date_of_birth. users keeps id, name, email. The API
 response shape of /users must not change."

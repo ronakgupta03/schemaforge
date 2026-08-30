@@ -1,6 +1,6 @@
 # @schemaforge/schemaforge
 
-Config-first autonomous database migration agent — TrueForge harness + MCP servers + registry + Evidence UI.
+Config-first autonomous database migration agent — TrueForge harness + MCP servers + registry.
 
 ## Quickstart
 
@@ -16,17 +16,35 @@ This starts:
 3. `github-mcp` (config port 9002, transport port 8002).
 4. `sf-registry` (port 9010).
 5. `TrueForge` agent harness (`npx @truefoundry/trueforge` on port 8790).
-6. Evidence UI + API reverse proxy on port 5173 (automatically opened in your default browser).
+6. A local mirror on port 5173 (config proxy + redirect), and the TrueForge UI is opened in your default browser.
+
+### The TrueForge UI
+
+Chat with the `schemaforge` agent in the TrueForge UI at
+`http://[::1]:8790` (or `http://localhost:8790` when TrueForge reuses an
+IPv4 listener). The forked UI ships SchemaForge evidence tabs —
+**Impact / Report / Changes / Verification / Activity** — that load the
+session's artifacts (`graph.mmd`, `report.md`, `migration.sql`,
+`diff.patch`, `verify.json`) from the sandbox, plus a **SchemaForge**
+section in Settings.
+
+Run `python scripts/patch-trueforge-mermaid.py` once so impact-graph
+mermaid blocks render inside chat (idempotent; re-run after any
+`npx` re-fetch).
 
 ### Configuration via the Settings Tab
 
-Once the UI opens at `http://localhost:5173`, navigate to the **Settings** tab to configure your environment:
+Open **Settings** in the TrueForge UI to configure your environment:
 
 1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
-2. **MCP Servers**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
-3. **Connectors**: Set up the production PostgreSQL connection (database DSN / URL) and the GitHub connector with your personal access token and target repository.
-4. **Sandbox**: Enable or disable the Daytona sandbox environment used for isolated migration execution and parity verification.
-5. **Apply Agent**: Re-generate the agent manifest and apply it to TrueForge. Unconfigured services are simply omitted: without a Postgres connector, the agent skips prod introspection and apply; without a GitHub connector, it saves `out/diff.patch` locally instead of opening a PR.
+2. **Connectors**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
+3. **SchemaForge**: Production PostgreSQL DSN, GitHub personal access token + default repo, config token, and an **Apply Agent** button that re-generates the agent manifest.
+4. **Skills**: Manage the `schemaforge-migration` git skill.
+5. **Sandbox providers**: Configure the Daytona sandbox used for isolated migration execution and parity verification.
+
+Unconfigured services are simply omitted: without a Postgres connector, the
+agent skips prod introspection and apply; without a GitHub connector, it
+saves `out/diff.patch` locally instead of opening a PR.
 
 ## Prerequisites
 
@@ -37,7 +55,7 @@ Once the UI opens at `http://localhost:5173`, navigate to the **Settings** tab t
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <number>` | `5173` | Port for the Evidence UI web server and proxy |
+| `--port <number>` | `5173` | Port for the local mirror web server and proxy |
 | `--state-dir <path>` | `~/.schemaforge` | Directory for Python venv, configuration files, and state |
 | `--no-open` | `false` | Prevent opening the browser automatically upon launch |
 
@@ -65,33 +83,32 @@ All settings can be configured in the UI or pre-seeded via environment variables
 ## Architecture
 
 ```
-                                      +------------------------------------+
-                                      |     Evidence UI (Vite / React)     |
-                                      |       http://localhost:5173        |
-                                      +-----------------+------------------+
-                                                        |
-                                                        v
-                                      +-----------------+------------------+
-                                      |      Reverse Proxy Server          |
-                                      |       (schemaforge CLI)            |
-                                      +---+-----------+----------+-----+---+
-                                          |           |          |     |
-             /api/sf/config/postgres-mcp  |           |          |     | /api
-                        +-----------------+           |          |     +-----------------+
-                        |   /api/sf/config/github-mcp |          |                       |
-                        |              +--------------+          | /api/sf               |
-                        v              v                         v                       v
-               +----------------+ +----------------+ +----------------+ +----------------+
-               |  postgres-mcp  | |   github-mcp   | |  sf-registry   | |   TrueForge    |
-               |   port 9001    | |   port 9002    | |   port 9010    | |   port 8790    |
-               +----------------+ +----------------+ +----------------+ +----------------+
+                                   +----------------------------+
+                                   |    TrueForge chat UI :8790 |
+                                   |  (SchemaForge evidence     |
+                                   |   tabs + Settings section) |
+                                   +-------------+--------------+
+                                                 ^  /tf  /api  (redirect + proxy)
+                                   +-------------+--------------+
+                                   |    Local mirror :5173      |
+                                   |    (schemaforge CLI)       |
+                                   +---+-----------+------+-----+
+                                       |           |      |
+        /api/sf/config/postgres-mcp    |           |      | /api/sf
+                   +-------------------+           |      +----------------+
+                   |   /api/sf/config/github-mcp   |                     |
+                   v              v                v                     v
+          +----------------+ +----------------+ +----------------+ +----------------+
+          |  postgres-mcp  | |   github-mcp   | |  sf-registry   | |   TrueForge    |
+          |   port 9001    | |   port 9002    | |   port 9010    | |   port 8790    |
+          +----------------+ +----------------+ +----------------+ +----------------+
 ```
 
 - **/api/sf/config/postgres-mcp** -> Proxies to `postgres-mcp` on `127.0.0.1:9001`
 - **/api/sf/config/github-mcp** -> Proxies to `github-mcp` on `127.0.0.1:9002`
 - **/api/sf** -> Proxies to `sf-registry` on `127.0.0.1:9010`
-- **/api** -> Proxies to `TrueForge` on `[::1]:8790` (or `127.0.0.1:8790` if reused)
-- **/** -> Serves static Evidence UI SPA with client-side routing fallback
+- **/api**, **/tf** -> Proxies to `TrueForge` on `[::1]:8790` (or `127.0.0.1:8790` if reused)
+- **/** -> Redirects to the TrueForge UI
 
 ## License
 
