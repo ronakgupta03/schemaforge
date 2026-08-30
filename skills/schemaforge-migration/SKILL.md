@@ -143,6 +143,11 @@ the app's own query files; do not assume a specific path). Save to
 ### 3. Code facts
 Subagent `code-analysis` or directly:
 `python -m schemaforge_core.pipeline facts --app /workspace/app --out out/code.json`.
+Understand the result with ONE python exec summary (per-model mapped tables
++ columns, endpoints per file, raw-SQL refs per file, counts) — never page
+the file with repeated grep/sed/jq one-liners (at most one targeted query
+per detail). Return the JSON content of `out/code.json` for the root to
+merge into the impact graph.
 
 ### 4. Graph + impact
 ```bash

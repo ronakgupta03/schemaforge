@@ -140,8 +140,13 @@ parallel:
    <plan_text>}}.
 2. `code-analysis` — instructions: in the sandbox, source the venv
    activation, then run
-   `python -m schemaforge_core.pipeline facts --app /workspace/app --out out/code.json`
-   and return the JSON content of that file.
+   `python -m schemaforge_core.pipeline facts --app /workspace/app --out out/code.json`.
+   To understand the result, summarize the file in ONE python exec (print
+   per-model mapped tables + columns, endpoints per file, attr-access
+   counts, raw-SQL refs per file). NEVER page the file with repeated
+   grep/sed/jq one-liners — at most one targeted query per detail. Finally
+   return the JSON content of `out/code.json` (the root merges it into the
+   impact graph).
 
 Subagents run in parallel and cannot see each other's results, so each one
 returns only what IT can produce on its own (db facts, or code facts). Back
