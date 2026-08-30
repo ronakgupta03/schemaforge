@@ -398,6 +398,30 @@ if (await httpProbe("::1", Number(tfPort), "/api/v1/capabilities")) {
   });
 }
 
+// 3b. Patch the served TrueForge UI so mermaid chat blocks render (best effort).
+// Retries until the npx package's _frontend exists (fresh npx fetch can take
+// a while); non-fatal — chat still works, graphs just render as code blocks.
+async function patchTrueForgeUi() {
+  const candidates = [
+    join(PKG_ROOT, "scripts", "patch-trueforge-mermaid.py"),
+    join(ROOT, "scripts", "patch-trueforge-mermaid.py"),
+    join(REPO_ROOT, "scripts", "patch-trueforge-mermaid.py"),
+  ];
+  const script = candidates.find((p) => existsSync(p));
+  if (!script) return true;
+  try {
+    const rc = await spawnAwait(py, [script], { timeout: 90000 });
+    if (rc !== 0) {
+      console.warn(`[schemaforge] mermaid patch exited ${rc} — retrying`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn(`[schemaforge] mermaid patch skipped: ${err.message}`);
+    return false;
+  }
+}
+
 // 4. Provision apply-agent (best effort after startup)
 async function bootstrapApplyAgent(regPort, maxWaitMs = 15000) {
   const start = Date.now();
@@ -457,6 +481,13 @@ async function bootstrapApplyAgent(regPort, maxWaitMs = 15000) {
     console.warn(`[schemaforge] apply-agent notice: ${err.message}`);
   }
 }
+
+(async () => {
+  for (let i = 0; i < 8; i++) {
+    if (await patchTrueForgeUi()) break;
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+})();
 
 // 5. local mirror: config proxy + redirect to the TrueForge UI
 function getProxyTarget(urlPath) {

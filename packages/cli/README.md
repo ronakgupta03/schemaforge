@@ -22,15 +22,17 @@ This starts:
 
 Chat with the `schemaforge` agent in the TrueForge UI at
 `http://[::1]:8790` (or `http://localhost:8790` when TrueForge reuses an
-IPv4 listener). The forked UI ships SchemaForge evidence tabs —
+IPv4 listener). The CLI patches the served frontend automatically on
+launch so impact-graph mermaid blocks render inside chat
+(`scripts/patch-trueforge-mermaid.py`, idempotent — re-run manually only
+after an `npx` re-fetch).
+
+The SchemaForge fork of the TrueForge UI additionally ships evidence tabs —
 **Impact / Report / Changes / Verification / Activity** — that load the
 session's artifacts (`graph.mmd`, `report.md`, `migration.sql`,
 `diff.patch`, `verify.json`) from the sandbox, plus a **SchemaForge**
-section in Settings.
-
-Run `python scripts/patch-trueforge-mermaid.py` once so impact-graph
-mermaid blocks render inside chat (idempotent; re-run after any
-`npx` re-fetch).
+section in Settings. The published package boots the stock TrueForge UI;
+evidence artifacts are still downloadable from the sandbox per session.
 
 ### Configuration via the Settings Tab
 

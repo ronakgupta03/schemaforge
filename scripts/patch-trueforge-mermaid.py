@@ -18,7 +18,12 @@ from pathlib import Path
 
 import httpx
 
-TF_ROOT = Path(os.path.expanduser(
+_npx_candidates = sorted(
+    Path(os.path.expanduser("~/.npm/_npx")).glob("*/node_modules/@truefoundry/trueforge"),
+    key=lambda p: p.stat().st_mtime if p.exists() else 0,
+    reverse=True,
+)
+TF_ROOT = _npx_candidates[0] if _npx_candidates else Path(os.path.expanduser(
     "~/.npm/_npx/efcb13bb8fe8f852/node_modules/@truefoundry/trueforge"))
 FRONTEND = TF_ROOT / "dist" / "_frontend"
 INDEX = FRONTEND / "index.html"

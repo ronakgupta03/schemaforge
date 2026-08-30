@@ -20,10 +20,10 @@ Demo video (1080p, ≤3:00): _link added after the final take_ ·
 Submission write-up: [`docs/submission-writeup.md`](docs/submission-writeup.md).
 
 > The built-in TrueForge UI does not render `mermaid` code blocks by
-> default (it only syntax-highlights them). If you are running the local
-> UI, run `python scripts/patch-trueforge-mermaid.py` once to inject the
-> mermaid runtime into the served frontend (idempotent; re-run after any
-> `npx` re-fetch). Verified: impact-graph mermaid blocks render as SVG.
+> default (it only syntax-highlights them). The CLI patches the served
+> frontend automatically on launch (`scripts/patch-trueforge-mermaid.py`,
+> idempotent — re-run it manually only after an `npx` re-fetch). Verified:
+> impact-graph mermaid blocks render as SVG.
 
 ## How it works
 
@@ -123,10 +123,13 @@ and opens the TrueForge chat UI at http://[::1]:8790. Running services on the
 default ports are reused instead of restarted. First run creates a Python
 venv and installs the engine + MCP dependencies.
 
-The UI is the TrueForge chat with SchemaForge evidence tabs
-(Impact / Report / Changes / Verification / Activity) plus a SchemaForge
-Settings section. **Configure everything in the UI — nothing is hardcoded.**
-The Settings tab has five sections:
+The UI is the TrueForge chat. This workspace's forked TrueForge UI adds
+SchemaForge evidence tabs (Impact / Report / Changes / Verification /
+Activity) plus a SchemaForge Settings section; the published package boots
+the stock TrueForge UI (mermaid chat graphs patched automatically, evidence
+artifacts still downloadable from the sandbox per session). **Configure
+everything in the UI — nothing is hardcoded.** The Settings tab has five
+sections:
 
 1. **Models**: Configure LLM provider API keys (OpenAI, Anthropic, Gemini, Cloudflare) and choose the active model for SchemaForge.
 2. **Connectors**: Inspect discovered MCP servers and toggle which servers are attached to the agent.
