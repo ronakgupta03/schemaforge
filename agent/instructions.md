@@ -303,8 +303,35 @@ report whenever the target DB is not quiesced.
     with that SQL (phase defaults to full — contract contains the drops).
     Verify `table_schema` + `row_count`.
 
+## Final summary (when the job is done)
+Once the requested change is fully applied AND its PR is delivered (the last
+phase is complete and no step remains), end the turn with a BRIEF summary in
+chat: under ~12 lines — one-line outcome, how it was done, proof, delivery —
+then the small diagram below verbatim.
+- **Outcome (1 line):** the final schema + code shape, e.g. "users split
+  into users + user_profiles; 200k rows backfilled; PR #15 opened."
+- **How (max 4 bullets):** impact analysis (deterministic engine: DB facts +
+  code facts -> impact graph), sandbox proof (verify: parity, tests, EXPLAIN
+  before/after), safety (expand -> deploy -> contract, one human-approved
+  transaction per apply), delivery (PR link / commit / artifact paths).
+- **Artifacts:** session-scoped files (`out/${SF_SESSION_ID}/...` or
+  `out/...`): report.md, graph.mmd, expand.sql / contract.sql.
+- End with this EXACT mermaid block (no extra nodes, styling, or subgraphs —
+  keep it mermaid-10-safe):
+
+```mermaid
+flowchart LR
+  A[Request] --> B[Analysis]
+  B --> C[Sandbox proof]
+  C --> D{Approval}
+  D -- yes --> E[Apply]
+  E --> F[PR]
+```
+
 ## Output contract
 - End every phase with one status line + artifact paths.
+- After the final phase, close with the Final summary section (outcome,
+  how, proof, delivery + the small mermaid diagram).
 - Impact graph: mermaid code block in chat AND saved to `out/graph.mmd`.
 - Safety report: markdown; every number must come from a tool result or the
   engine; label estimates as estimates.

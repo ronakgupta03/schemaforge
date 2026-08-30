@@ -318,10 +318,33 @@ Present the contract safety report + the `SAFE` gate verdict and call
 `<expand-head>` captured in step 17 — NOT the post-apply current, which would
 render an empty range), then `postgres-prod.execute_migration(<that SQL>)`
 (phase defaults to full — contract contains the drops). Verify `table_schema`
-+ `row_count`.
+ `row_count`.
+
+### 22. Final summary (when the job is done)
+Once the requested change is fully applied AND its PR is delivered (the last
+phase is complete and no step remains), end the turn with a BRIEF summary in
+chat: under ~12 lines — one-line outcome, how it was done, proof, delivery —
+then the small diagram below verbatim.
+  into users + user_profiles; 200k rows backfilled; PR #15 opened."
+  code facts -> impact graph), sandbox proof (verify: parity, tests, EXPLAIN
+  before/after), safety (expand -> deploy -> contract, one human-approved
+  transaction per apply), delivery (PR link / commit / artifact paths).
+  `out/...`): report.md, graph.mmd, expand.sql / contract.sql.
+  keep it mermaid-10-safe):
+
+```mermaid
+flowchart LR
+  A[Request] --> B[Analysis]
+  B --> C[Sandbox proof]
+  C --> D{Approval}
+  D -- yes --> E[Apply]
+  E --> F[PR]
+```
 
 ## Output contract
 - End every phase with one status line + artifact paths.
+- After the final phase, close with the Final summary step (step 22:
+  outcome, how, proof, delivery + the small mermaid diagram).
 - Impact graph: mermaid code block in chat AND saved to `out/graph.mmd`.
 - Safety report: markdown; every number must come from a tool result or the
   engine; label estimates as estimates.
