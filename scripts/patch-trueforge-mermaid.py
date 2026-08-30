@@ -7,8 +7,13 @@ that replaces highlighted mermaid code blocks with rendered SVG.
 
 Idempotent: safe to re-run. Re-run after `npx` re-fetches the package
 (or npx cache invalidation).
+
+Streaming-safe: mermaid blocks stream in token by token; a render attempt on
+a partial block fails with a "Syntax error" toast and the old patch never
+retried (the block stayed broken). This patch releases the render lock on
+failure and re-scans until the block text is stable and parses.
 """
-import gzip, os, re, shutil, sys
+import os, re, sys
 from pathlib import Path
 
 import httpx
@@ -44,20 +49,40 @@ observer = """
 (function(){var sfMermaid=1;
   if (typeof mermaid === 'undefined') return;   /* offline: leave blocks as code */
   var seen = 0;
+  var lastTry = {};
   function renderBlock(code){
     var pre = code.closest('pre');
     if (!pre || pre.getAttribute('data-sf-mermaid')) return;
+    var src = code.textContent || '';
+    if (!src.trim()) return;
+    /* Streaming guard: if a previous attempt failed, wait until the block
+       stops growing before retrying (a partial block always fails). */
+    var prev = lastTry[pre];
+    if (prev && prev.text === src && !prev.ready) {
+      if (Date.now() - prev.at < 700) return;  /* stable but recent failure: wait */
+      /* stale stable failure: fall through and retry now */
+    }
+    lastTry[pre] = { text: src, at: Date.now(), ready: false };
     pre.setAttribute('data-sf-mermaid','1');
-    var src = code.textContent;
     var id = 'sf-mmd-' + (++seen);
     mermaid.render(id, src).then(function(r){
+      lastTry[pre].ready = true;
       var div = document.createElement('div');
       div.className = 'sf-mermaid-render';
       div.innerHTML = r.svg;
       pre.parentNode.replaceChild(div, pre);
     }).catch(function(e){
-      pre.outerHTML = '<pre style="color:#c00">mermaid error: ' +
-        ((e && e.message) ? e.message : e) + '</pre>';
+      /* Partial/streamed block — release the lock so the MutationObserver
+         retries once the full text lands. Keep a transient error hint. */
+      lastTry[pre].ready = true;
+      pre.removeAttribute('data-sf-mermaid');
+      var old = pre.querySelector('.sf-mermaid-error');
+      if (old) old.remove();
+      var note = document.createElement('span');
+      note.className = 'sf-mermaid-error';
+      note.textContent = 'mermaid: ' + ((e && e.message) ? e.message : e) + ' (retrying…)';
+      pre.appendChild(note);
+      setTimeout(function(){ if (pre.isConnected) { var n = pre.querySelector('.sf-mermaid-error'); if (n) n.remove(); } }, 1500);
     });
   }
   function scan(){
@@ -68,6 +93,7 @@ observer = """
   var mo = new MutationObserver(scan);
   mo.observe(document.documentElement, {childList:true, subtree:true});
   scan();
+  setInterval(scan, 1500);
 })();
 </script>
 """
