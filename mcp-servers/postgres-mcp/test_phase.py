@@ -1,17 +1,23 @@
 """Functional test: execute_migration(phase='expand') rejects non-additive verbs.
 
 The expand guard is an ALLOWLIST, not a denylist: only additive statements
-(CREATE, INSERT backfill, UPDATE alembic_version, ADD COLUMN/CONSTRAINT,
-ALTER COLUMN SET DEFAULT, VALIDATE CONSTRAINT) pass; everything else is
-rejected so a mis-authored expand fails safely rather than modifying
-existing objects. This keeps the test hermetic: no real DB is touched.
+(CREATE, INSERT backfill, UPDATE alembic_version, UPDATE backfill of
+columns the batch ADDed, ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT,
+VALIDATE CONSTRAINT) pass; everything else is rejected so a mis-authored
+expand fails safely rather than modifying existing objects. This keeps the
+test hermetic: no real DB is touched.
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 import server  # noqa: E402
-from server import execute_migration, _is_expand_allowed  # noqa: E402
+from server import (  # noqa: E402
+    execute_migration,
+    _is_expand_allowed,
+    _validate_migration_statement,
+    _added_columns,
+)
 
 
 class _MockConn:
@@ -87,11 +93,56 @@ assert _is_expand_allowed(
 assert _is_expand_allowed("ALTER TABLE users VALIDATE CONSTRAINT chk") is None
 # multi-line additive statement (regex must span newlines for the ALTER clause)
 assert _is_expand_allowed("ALTER TABLE users\n  ADD COLUMN x int") is None
+# --- 1b. UPDATE backfill: SET columns must be ADDed by the batch ---
+_ADDED_USERS = {"users": {"id_uuid"}}
+assert _is_expand_allowed("UPDATE users SET id_uuid = gen_random_uuid()", _ADDED_USERS) is None
+assert _is_expand_allowed(
+    "UPDATE users SET id_uuid = gen_random_uuid() WHERE id_uuid IS NULL", _ADDED_USERS
+) is None
+assert _is_expand_allowed(
+    "UPDATE users SET id_uuid = 1, slug = lower(name)", {"users": {"id_uuid", "slug"}}
+) is None
+assert _is_expand_allowed(
+    "UPDATE users SET note = 'a,b', id_uuid = 1", {"users": {"id_uuid", "note"}}
+) is None  # comma inside a string literal is not a SET separator
+assert _is_expand_allowed(
+    'UPDATE users SET "IdUuid" = gen_random_uuid()', {"users": {"iduuid"}}
+) is None  # quoted identifiers are normalized
+# pre-existing / smuggled / wrong-table columns stay rejected:
+assert _is_expand_allowed("UPDATE users SET name = 'x'", _ADDED_USERS) is not None
+assert _is_expand_allowed("UPDATE users SET id_uuid = 1, email = 'x'", _ADDED_USERS) is not None
+assert _is_expand_allowed("UPDATE blogs SET id_uuid = 1", _ADDED_USERS) is not None
+assert _is_expand_allowed("UPDATE users SET id_uuid = 1", None) is not None  # no batch context
+
+# --- 1c. _added_columns: ADD COLUMN tracking, clause starters excluded ---
+assert _added_columns(["ALTER TABLE users ADD COLUMN id_uuid uuid"]) == {"users": {"id_uuid"}}
+assert _added_columns(
+    [
+        "ALTER TABLE users ADD COLUMN a int, ADD COLUMN b text",
+        "ALTER TABLE users ADD CONSTRAINT chk CHECK (a > 0)",
+    ]
+) == {"users": {"a", "b"}}
+assert _added_columns(
+    ["ALTER TABLE users ADD COLUMN note text DEFAULT 'ADD COLUMN foo'"]
+) == {"users": {"note"}}  # words inside string literals are not ADD COLUMNs
+assert _added_columns(["CREATE TABLE t (id int)"]) == {}
+
+# --- 1d. _validate_migration_statement: backfill UPDATE needs batch context ---
+_validate_migration_statement(
+    "UPDATE users SET id_uuid = gen_random_uuid()", {"users": {"id_uuid"}}
+)
+try:
+    _validate_migration_statement("UPDATE users SET email = 'x'", {"users": {"id_uuid"}})
+except ValueError as e:
+    assert "not added" in str(e)
+else:
+    raise SystemExit("FAIL: _validate_migration_statement accepted pre-existing column UPDATE")
 
 # --- 2. phase='expand' rejects non-additive DDL (pre-DB ValueError) ---
 #     These DDL verbs pass the general execute_migration verb allowlist but
-#     are rejected by the additive phase guard. (DELETE/UPDATE are rejected
-#     even earlier by the general allowlist, so they are not asserted here.)
+#     are rejected by the additive phase guard. (DELETE is rejected even
+#     earlier by the general allowlist, so it is not asserted here. UPDATE
+#     backfills are covered in sections 1b/4b.)
 for bad in [
     "DROP TABLE nope_xyz",
     "TRUNCATE TABLE nope_xyz",
@@ -124,6 +175,11 @@ for good in [
     "ALTER TABLE nope_xyz ADD COLUMN newcol int",
     "ALTER TABLE nope_xyz ADD CONSTRAINT ck CHECK (newcol > 0)",
     "UPDATE alembic_version SET version_num='0002'",
+    (
+        "ALTER TABLE users ADD COLUMN id_uuid uuid;\n"
+        "UPDATE users SET id_uuid = gen_random_uuid();\n"
+        "UPDATE alembic_version SET version_num='0002';"
+    ),
 ]:
     try:
         execute_migration(good, phase="expand")
@@ -134,6 +190,18 @@ for good in [
             raise SystemExit(
                 f"FAIL: additive batch wrongly rejected by expand guard: {good!r}"
             )
+# --- 4b. UPDATE backfill of a column NOT added by the batch is rejected ---
+for bad_batch in [
+    "ALTER TABLE users ADD COLUMN id_uuid uuid;\nUPDATE users SET email='x';",
+    "UPDATE users SET id_uuid = gen_random_uuid();",  # no ADD COLUMN at all
+    "UPDATE users SET id_uuid = 1;\nUPDATE users SET id_uuid = 1, email='x';",
+]:
+    try:
+        execute_migration(bad_batch, phase="expand")
+    except ValueError as e:
+        assert "not added" in str(e), f"unexpected ValueError: {e}"
+    else:
+        raise SystemExit(f"FAIL: expand guard accepted bad backfill batch: {bad_batch!r}")
 
 # --- 5. phase=None SKIPS the guard entirely ---
 #     A contractive verb reaches the mocked _conn (RuntimeError), proving the

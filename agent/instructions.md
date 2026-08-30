@@ -189,7 +189,8 @@ report whenever the target DB is not quiesced.
    files/endpoints.
 5. Author the EXPAND migration (`alembic/versions/<rev>a_<slug>.py`):
    additive only — `create_table`, `add_column` (nullable or with default),
-   `create_index`, `INSERT..SELECT` backfill, and `alter_column(...,
+   `create_index`, `INSERT..SELECT` backfill, `UPDATE` backfill of the new
+   columns (only columns this migration ADDed), and `alter_column(...,
    nullable=True)` (DROP NOT NULL) on any legacy column the FINAL app will
    stop writing, so the final app build can insert rows without it during
    the expand->contract window. NO `drop_*`, NO
@@ -224,8 +225,9 @@ report whenever the target DB is not quiesced.
 10. On approval: `cd /workspace/app && alembic upgrade <current>:head --sql > /workspace/out/expand.sql`,
     then call `postgres-prod.execute_migration` with that SQL and
     `phase='expand'`. (The MCP guard is an additive ALLOWLIST: it accepts
-    CREATE, INSERT backfill, ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT,
-    DROP NOT NULL, and VALIDATE CONSTRAINT, and rejects everything else
+    CREATE, INSERT backfill, UPDATE backfill of columns the batch ADDed,
+    ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP NOT NULL, and
+    VALIDATE CONSTRAINT, and rejects everything else
     (DROP, SET NOT NULL, ALTER COLUMN TYPE, RENAME, SET TABLESPACE) so a
     mis-authored expand fails safely rather than touching prod.) After it
     returns, verify with `table_schema` + `row_count`.

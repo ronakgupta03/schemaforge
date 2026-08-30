@@ -62,8 +62,9 @@ here is tied to a specific codebase.
    NOT NULL) on legacy columns the final app will stop writing — NO `drop_*`,
    NO `alter_column(..., nullable=False)` (SET NOT NULL is contractive), NO
    `alter_column(..., type=...)`. `execute_migration(phase='expand')` is an
-   additive ALLOWLIST (CREATE, INSERT backfill, ADD COLUMN/CONSTRAINT, ALTER
-   COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE CONSTRAINT); everything else
+   additive ALLOWLIST (CREATE, INSERT backfill, UPDATE backfill of columns
+   the batch ADDed, ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP
+   NOT NULL, VALIDATE CONSTRAINT); everything else
    is rejected, so a mis-authored expand fails safely.
 9. **Concurrent-write scope.** The expand backfill + the contract
    reconciliation handle a quiesced/low-write window, and the expand app
@@ -167,7 +168,8 @@ sf-pipeline bench --dsn $DATABASE_URL --queries <app query file(s)> --out out/ex
 ### 6. Author the EXPAND migration
 In `/workspace/app`: add a new revision `<rev>a_<slug>.py` (e.g. Alembic
 `alembic revision`). Additive ONLY — `create_table`, `add_column` (nullable
-or with a default), `create_index`, `INSERT..SELECT` backfill, and
+or with a default), `create_index`, `INSERT..SELECT` backfill, `UPDATE`
+backfill of the new columns (only columns this migration ADDed), and
 `alter_column(..., nullable=True)` (DROP NOT NULL) on any legacy column the
 final app will stop writing (so the final app build can insert rows without
 it during the expand->contract window). NO `drop_*`, NO

@@ -95,16 +95,189 @@ _CONTRACTIVE_ALTER = re.compile(
 )
 
 
-def _is_expand_allowed(clean: str) -> str | None:
+# ---- UPDATE backfill bound: SET columns must be ADDed by this batch ----
+# A backfill UPDATE (populating columns the migration just added) is
+# expand-safe; an UPDATE of any pre-existing column is not. The batch is
+# scanned for ADD COLUMN targets, then every UPDATE's SET columns must be a
+# subset of them — the same provable bound the INSERT..SELECT rule applies to
+# backfill targets.
+_UPDATE_TABLE = re.compile(
+    r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\s+SET\b",
+    re.IGNORECASE,
+)
+_ADD_CLAUSE_STARTERS = {"constraint", "primary", "unique", "foreign", "check", "exclude"}
+
+
+def _norm_ident(name: str) -> str:
+    """Lower-case a (possibly quoted, possibly schema-qualified) identifier."""
+    return name.strip().strip('"').lower()
+
+
+def _mask_quoted(sql: str) -> str:
+    """Blank string literals and dollar-quoted bodies, keep structure.
+
+    Regex scans of the batch must never treat words inside string literals as
+    SQL. Double-quoted identifiers are kept (they name objects).
+    """
+    out = list(sql)
+    i, n = 0, len(sql)
+    in_str = False
+    dollar_tag: str | None = None
+    while i < n:
+        if dollar_tag is not None:
+            if sql.startswith(dollar_tag, i):
+                dollar_tag = None
+                i += len(dollar_tag)
+            else:
+                out[i] = " "
+                i += 1
+            continue
+        ch = sql[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    out[i] = out[i + 1] = " "
+                    i += 2
+                    continue
+                in_str = False
+            out[i] = " "
+            i += 1
+            continue
+        if ch == "'":
+            in_str = True
+            out[i] = " "
+            i += 1
+        elif ch == '"':
+            i += 1
+            while i < n and sql[i] != '"':
+                i += 1
+            i += 1
+        elif ch == "$":
+            m = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", sql[i:])
+            if m:
+                dollar_tag = m.group(0)
+                for j in range(i, min(i + len(dollar_tag), n)):
+                    out[j] = " "
+                i += len(dollar_tag)
+            else:
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _added_columns(statements: list[str]) -> dict[str, set[str]]:
+    """Columns each table gains from this batch (ALTER TABLE ... ADD [COLUMN]).
+
+    ADD CONSTRAINT / PRIMARY KEY / UNIQUE / FOREIGN KEY / CHECK / EXCLUDE are
+    clauses, not columns, and are skipped. Quoted identifiers are normalized.
+    """
+    added: dict[str, set[str]] = {}
+    for stmt in statements:
+        masked = _mask_quoted(stmt)
+        m = re.match(
+            r"\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\b",
+            masked,
+            re.IGNORECASE,
+        )
+        if not m:
+            continue
+        table = _norm_ident(m.group(1))
+        for am in re.finditer(
+            r"\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
+            r"([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")",
+            masked,
+            re.IGNORECASE,
+        ):
+            col = _norm_ident(am.group(1))
+            if col and col not in _ADD_CLAUSE_STARTERS:
+                added.setdefault(table, set()).add(col)
+    return added
+
+
+def _update_set_columns(clean: str) -> tuple[str, list[str]] | None:
+    """Return (table, [SET columns]) for an UPDATE backfill, else None.
+
+    The SET clause is split on commas at paren-depth 0 outside quotes, so
+    commas inside function calls, string literals, or dollar bodies never
+    fragment it. Chunks that do not start with `column =` (e.g. a WHERE tail)
+    are ignored.
+    """
+    m = _UPDATE_TABLE.match(clean)
+    if not m:
+        return None
+    table = _norm_ident(m.group(1))
+    rest = clean[m.end():]
+    chunks: list[str] = []
+    start = 0
+    depth = 0
+    i, n = 0, len(rest)
+    in_str = False
+    dollar_tag: str | None = None
+    while i < n:
+        if dollar_tag is not None:
+            if rest.startswith(dollar_tag, i):
+                dollar_tag = None
+                i += len(dollar_tag)
+            else:
+                i += 1
+            continue
+        ch = rest[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < n and rest[i + 1] == "'":
+                    i += 2
+                    continue
+                in_str = False
+            i += 1
+            continue
+        if ch == "'":
+            in_str = True
+            i += 1
+        elif ch == '"':
+            i += 1
+            while i < n and rest[i] != '"':
+                i += 1
+            i += 1
+        elif ch == "$":
+            m2 = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", rest[i:])
+            if m2:
+                dollar_tag = m2.group(0)
+                i += len(dollar_tag)
+            else:
+                i += 1
+        elif ch == "(":
+            depth += 1
+            i += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+            i += 1
+        elif ch == "," and depth == 0:
+            chunks.append(rest[start:i])
+            i += 1
+            start = i
+        else:
+            i += 1
+    chunks.append(rest[start:])
+    cols: list[str] = []
+    for chunk in chunks:
+        cm = re.match(r"\s*([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\s*=", chunk)
+        if cm:
+            cols.append(_norm_ident(cm.group(1)))
+    return table, cols
+
+
+def _is_expand_allowed(clean: str, added: dict[str, set[str]] | None = None) -> str | None:
     """Return None if `clean` is an additive (expand-safe) statement, else a reason.
 
     Allowlist, not denylist: only additive verbs pass, everything else is
     rejected (fail-closed). Additive = CREATE, INSERT backfill, UPDATE
-    alembic_version stamping, or an ALTER whose EVERY sub-action is additive
-    (ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE
-    CONSTRAINT). A contractive sub-action anywhere in an ALTER (DROP COLUMN,
-    SET NOT NULL, ALTER COLUMN TYPE, RENAME, ...) is rejected first, so a
-    destructive action cannot smuggle past an additive one.
+    alembic_version stamping, an UPDATE backfill of columns this batch ADDed,
+    or an ALTER whose EVERY sub-action is additive (ADD COLUMN/CONSTRAINT,
+    ALTER COLUMN SET DEFAULT, DROP NOT NULL, VALIDATE CONSTRAINT). A
+    contractive sub-action anywhere in an ALTER (DROP COLUMN, SET NOT NULL,
+    ALTER COLUMN TYPE, RENAME, ...) is rejected first, so a destructive
+    action cannot smuggle past an additive one.
     """
     if re.match(r"^\s*CREATE\b", clean, re.IGNORECASE):
         return None
@@ -112,6 +285,20 @@ def _is_expand_allowed(clean: str) -> str | None:
         return None
     if re.match(r"^\s*UPDATE\s+alembic_version\b", clean, re.IGNORECASE):
         return None
+    if re.match(r"^\s*UPDATE\b", clean, re.IGNORECASE):
+        parsed = _update_set_columns(clean)
+        if parsed and added is not None:
+            table, cols = parsed
+            allowed = added.get(table, set())
+            bad = [c for c in cols if c not in allowed]
+            if cols and not bad:
+                return None
+            if bad:
+                return (
+                    f"UPDATE backfill sets column(s) {bad} on {table!r} "
+                    "not added by this migration"
+                )
+        return "UPDATE backfill must SET only columns added by this migration"
     if re.match(r"^\s*ALTER\b", clean, re.IGNORECASE):
         if _CONTRACTIVE_ALTER.search(clean):
             return "contractive ALTER sub-action"
@@ -333,7 +520,9 @@ def _strip_sql_comments(statement: str) -> str:
     return "".join(out)
 
 
-def _validate_migration_statement(statement: str) -> None:
+def _validate_migration_statement(
+    statement: str, added: dict[str, set[str]] | None = None
+) -> None:
     stmt = _strip_sql_comments(statement)
     if not stmt:
         raise ValueError("empty statement in migration batch")
@@ -348,6 +537,24 @@ def _validate_migration_statement(statement: str) -> None:
             return  # data backfill — target existence is checked at apply time
     if _UPDATE_ALEMBIC.match(stmt):
         return  # Alembic version bookkeeping only
+    parsed = _update_set_columns(stmt)
+    if parsed:
+        if added is None:
+            raise ValueError(
+                "UPDATE backfill cannot be validated without ADD COLUMN context"
+            )
+        table, cols = parsed
+        if not cols:
+            raise ValueError(
+                f"UPDATE backfill on {table!r} must SET at least one column"
+            )
+        bad = [c for c in cols if c not in added.get(table, set())]
+        if bad:
+            raise ValueError(
+                f"UPDATE backfill sets column(s) {bad} on {table!r} "
+                "not added by this migration"
+            )
+        return
     raise ValueError(f"statement not allowed by execute_migration: {stmt[:80]!r}")
 
 
@@ -370,15 +577,17 @@ def _existing_tables(conn: psycopg.Connection) -> set[str]:
         "failure rolls back every earlier statement. Irreversible — the "
         "harness pauses this call for human approval. Pass phase='expand' for "
         "an additive migration: it may only CREATE new objects and backfill "
-        "them — DROP/TRUNCATE/ALTER are rejected so an expand apply never "
-        "modifies or removes existing schema."
+        "them — DROP/TRUNCATE/contractive ALTER are rejected, and UPDATE "
+        "backfills may only SET columns this batch ADDed, so an expand apply "
+        "never modifies or removes existing schema."
     ),
 )
 def execute_migration(sql: str, phase: str | None = None) -> str:
     """Run an `alembic upgrade <rev>:head --sql` batch on prod, atomically.
 
-    phase='expand' rejects any statement whose first verb is DROP/TRUNCATE/ALTER
-    (the expand migration must be purely additive: create new + backfill only).
+    phase='expand' rejects DROP/TRUNCATE and contractive ALTER (the expand
+    migration must be purely additive: create new + backfill only). UPDATE
+    backfills pass only when every SET column was ADDed by this batch.
     """
     # Fail-closed: the only valid phase values are None (full/contract mode,
     # backward-compatible — no guard) and 'expand' (additive guard). Any
@@ -398,11 +607,12 @@ def execute_migration(sql: str, phase: str | None = None) -> str:
     ]
     if not statements:
         raise ValueError("migration batch contains only transaction framing")
+    added = _added_columns(statements)
     for stmt in statements:
-        _validate_migration_statement(stmt)
+        _validate_migration_statement(stmt, added)
         if phase == "expand":
             clean = _strip_sql_comments(stmt)
-            reason = _is_expand_allowed(clean)
+            reason = _is_expand_allowed(clean, added)
             if reason:
                 raise ValueError(
                     f"expand-phase migration must be additive; {reason}: {clean[:80]!r}"
