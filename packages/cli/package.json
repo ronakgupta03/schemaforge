@@ -1,21 +1,23 @@
 {
   "name": "@schemaforge/schemaforge",
   "version": "0.1.0",
-  "description": "SchemaForge — config-first autonomous DB migration agent (TrueForge harness + MCP servers + evidence UI)",
+  "description": "SchemaForge \u2014 config-first autonomous DB migration agent (TrueForge harness + MCP servers + registry)",
   "type": "module",
-  "bin": { "schemaforge": "bin/schemaforge.js" },
+  "bin": {
+    "schemaforge": "bin/schemaforge.js"
+  },
   "files": [
     "bin/",
-    "ui-dist/",
     "mcp-servers/",
     "core/",
     "agent/",
     "skills/",
     "scripts/"
   ],
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "prepack": "node scripts/prepack.mjs",
-    "build": "cd ../../ui && npm run build && rm -rf ../packages/cli/ui-dist && cp -r dist ../packages/cli/ui-dist"
+    "prepack": "node scripts/prepack.mjs"
   }
 }
