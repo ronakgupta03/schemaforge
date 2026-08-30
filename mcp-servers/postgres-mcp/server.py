@@ -102,7 +102,11 @@ _CONTRACTIVE_ALTER = re.compile(
 # subset of them — the same provable bound the INSERT..SELECT rule applies to
 # backfill targets.
 _UPDATE_TABLE = re.compile(
-    r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\s+SET\b",
+    # UPDATE <table> [<alias>] SET ... — the alias is required by join-form
+    # backfills like `UPDATE comments c SET blog_id_uuid = b.uuid FROM blogs b
+    # WHERE b.id = c.blog_id AND c.blog_id_uuid IS NULL`.
+    r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\s+"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*\s+)?SET\b",
     re.IGNORECASE,
 )
 _ADD_CLAUSE_STARTERS = {"constraint", "primary", "unique", "foreign", "check", "exclude"}

@@ -17,6 +17,7 @@ from server import (  # noqa: E402
     _is_expand_allowed,
     _validate_migration_statement,
     _added_columns,
+    _update_set_columns,
 )
 
 
@@ -138,6 +139,47 @@ except ValueError as e:
 else:
     raise SystemExit("FAIL: _validate_migration_statement accepted pre-existing column UPDATE")
 
+# --- 1e. UPDATE..FROM join-form backfills (target alias) ---
+# The live UUIDv7 expand migration backfills FK twins as
+# `UPDATE comments c SET blog_id_uuid = b.uuid FROM blogs b WHERE ...` — the
+# target alias between table and SET must parse (previously rejected with
+# "statement not allowed by execute_migration").
+assert _update_set_columns(
+    "UPDATE comments c SET blog_id_uuid = b.uuid FROM blogs b "
+    "WHERE b.id = c.blog_id AND c.blog_id_uuid IS NULL"
+) == ("comments", ["blog_id_uuid"])
+assert _update_set_columns(
+    "UPDATE blog_votes bv SET blog_id_uuid = b.uuid, user_id_uuid = u.uuid "
+    "FROM users u WHERE u.id = bv.user_id AND bv.user_id_uuid IS NULL"
+) == ("blog_votes", ["blog_id_uuid", "user_id_uuid"])
+assert _update_set_columns(
+    "UPDATE comment_votes cv SET comment_id_uuid = c.uuid, user_id_uuid = u.uuid "
+    "FROM comments c WHERE c.id = cv.comment_id AND cv.comment_id_uuid IS NULL"
+) == ("comment_votes", ["comment_id_uuid", "user_id_uuid"])
+assert _update_set_columns(
+    "UPDATE refresh_tokens rt SET user_id_uuid = u.uuid FROM users u "
+    "WHERE u.id = rt.user_id AND rt.user_id_uuid IS NULL"
+) == ("refresh_tokens", ["user_id_uuid"])
+# scalar form (no alias) and schema-qualified/aliased variants still parse:
+assert _update_set_columns("UPDATE users SET uuid = 1 WHERE uuid IS NULL") == (
+    "users",
+    ["uuid"],
+)
+assert _update_set_columns("UPDATE public.users u SET uuid = 1") == (
+    "public.users",
+    ["uuid"],
+)
+# alias form stays bounded: SET on a pre-existing column is rejected
+assert _is_expand_allowed(
+    "UPDATE comments c SET blog_id = b.id FROM blogs b WHERE b.id = c.blog_id",
+    {"comments": {"blog_id_uuid"}},
+) is not None
+# alias form without batch context is rejected (fail-closed)
+assert _is_expand_allowed(
+    "UPDATE comments c SET blog_id_uuid = b.uuid FROM blogs b WHERE b.id = c.blog_id",
+    None,
+) is not None
+
 # --- 2. phase='expand' rejects non-additive DDL (pre-DB ValueError) ---
 #     These DDL verbs pass the general execute_migration verb allowlist but
 #     are rejected by the additive phase guard. (DELETE is rejected even
@@ -202,6 +244,90 @@ for bad_batch in [
         assert "not added" in str(e), f"unexpected ValueError: {e}"
     else:
         raise SystemExit(f"FAIL: expand guard accepted bad backfill batch: {bad_batch!r}")
+
+# --- 4c. the live UUIDv7 expand batch (alias + FROM join form) passes ---
+# Mirrors backend/migrations/2025-08-30_uuidv7_expand.sql minus the already-
+# applied sf_uuidv7() function: ADD uuid x9, backfill uuid x9, ADD FK twins
+# x11, UPDATE..FROM twin backfills x11, unique index x9, index twins x6,
+# SET DEFAULT x9. Every SET column is ADDed by this batch, so each statement
+# must pass _validate_migration_statement AND the expand allowlist, and the
+# whole batch must reach the mocked _conn.
+_UUIDV7_BATCH = [
+    "ALTER TABLE users ADD COLUMN uuid uuid;",
+    "ALTER TABLE blogs ADD COLUMN uuid uuid;",
+    "ALTER TABLE comments ADD COLUMN uuid uuid;",
+    "ALTER TABLE blog_votes ADD COLUMN uuid uuid;",
+    "ALTER TABLE comment_votes ADD COLUMN uuid uuid;",
+    "ALTER TABLE otps ADD COLUMN uuid uuid;",
+    "ALTER TABLE refresh_tokens ADD COLUMN uuid uuid;",
+    "ALTER TABLE blog_reactions ADD COLUMN uuid uuid;",
+    "ALTER TABLE glossary_terms ADD COLUMN uuid uuid;",
+    "UPDATE users SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE blogs SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE comments SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE blog_votes SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE comment_votes SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE otps SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE refresh_tokens SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE blog_reactions SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "UPDATE glossary_terms SET uuid = sf_uuidv7((EXTRACT(EPOCH FROM COALESCE(created_at, clock_timestamp())) * 1000)::bigint) WHERE uuid IS NULL;",
+    "ALTER TABLE comments ADD COLUMN blog_id_uuid uuid;",
+    "ALTER TABLE comments ADD COLUMN user_id_uuid uuid;",
+    "ALTER TABLE comments ADD COLUMN parent_id_uuid uuid;",
+    "ALTER TABLE blog_votes ADD COLUMN blog_id_uuid uuid;",
+    "ALTER TABLE blog_votes ADD COLUMN user_id_uuid uuid;",
+    "ALTER TABLE comment_votes ADD COLUMN comment_id_uuid uuid;",
+    "ALTER TABLE comment_votes ADD COLUMN user_id_uuid uuid;",
+    "ALTER TABLE refresh_tokens ADD COLUMN user_id_uuid uuid;",
+    "ALTER TABLE blog_reactions ADD COLUMN blog_id_uuid uuid;",
+    "ALTER TABLE blog_reactions ADD COLUMN user_id_uuid uuid;",
+    "ALTER TABLE glossary_terms ADD COLUMN blog_id_uuid uuid;",
+    "UPDATE comments c SET blog_id_uuid = b.uuid FROM blogs b WHERE b.id = c.blog_id AND c.blog_id_uuid IS NULL;",
+    "UPDATE comments c SET user_id_uuid = u.uuid FROM users u WHERE u.id = c.user_id AND c.user_id_uuid IS NULL;",
+    "UPDATE comments c SET parent_id_uuid = p.uuid FROM comments p WHERE p.id = c.parent_id AND c.parent_id_uuid IS NULL;",
+    "UPDATE blog_votes bv SET blog_id_uuid = b.uuid FROM blogs b WHERE b.id = bv.blog_id AND bv.blog_id_uuid IS NULL;",
+    "UPDATE blog_votes bv SET user_id_uuid = u.uuid FROM users u WHERE u.id = bv.user_id AND bv.user_id_uuid IS NULL;",
+    "UPDATE comment_votes cv SET comment_id_uuid = c.uuid FROM comments c WHERE c.id = cv.comment_id AND cv.comment_id_uuid IS NULL;",
+    "UPDATE comment_votes cv SET user_id_uuid = u.uuid FROM users u WHERE u.id = cv.user_id AND cv.user_id_uuid IS NULL;",
+    "UPDATE refresh_tokens rt SET user_id_uuid = u.uuid FROM users u WHERE u.id = rt.user_id AND rt.user_id_uuid IS NULL;",
+    "UPDATE blog_reactions br SET blog_id_uuid = b.uuid FROM blogs b WHERE b.id = br.blog_id AND br.blog_id_uuid IS NULL;",
+    "UPDATE blog_reactions br SET user_id_uuid = u.uuid FROM users u WHERE u.id = br.user_id AND br.user_id_uuid IS NULL;",
+    "UPDATE glossary_terms gt SET blog_id_uuid = b.uuid FROM blogs b WHERE b.id = gt.blog_id AND gt.blog_id_uuid IS NULL;",
+    "CREATE UNIQUE INDEX users_uuid_key ON users (uuid);",
+    "CREATE UNIQUE INDEX blogs_uuid_key ON blogs (uuid);",
+    "CREATE UNIQUE INDEX comments_uuid_key ON comments (uuid);",
+    "CREATE UNIQUE INDEX blog_votes_uuid_key ON blog_votes (uuid);",
+    "CREATE UNIQUE INDEX comment_votes_uuid_key ON comment_votes (uuid);",
+    "CREATE UNIQUE INDEX otps_uuid_key ON otps (uuid);",
+    "CREATE UNIQUE INDEX refresh_tokens_uuid_key ON refresh_tokens (uuid);",
+    "CREATE UNIQUE INDEX blog_reactions_uuid_key ON blog_reactions (uuid);",
+    "CREATE UNIQUE INDEX glossary_terms_uuid_key ON glossary_terms (uuid);",
+    "CREATE UNIQUE INDEX blog_votes_blog_id_uuid_user_id_uuid_key ON blog_votes (blog_id_uuid, user_id_uuid);",
+    "CREATE INDEX idx_blog_votes_blog_uuid ON blog_votes (blog_id_uuid);",
+    "CREATE INDEX idx_blog_votes_user_uuid ON blog_votes (user_id_uuid);",
+    "CREATE UNIQUE INDEX comment_votes_comment_id_uuid_user_id_uuid_key ON comment_votes (comment_id_uuid, user_id_uuid);",
+    "CREATE UNIQUE INDEX blog_reactions_blog_id_uuid_user_id_uuid_reaction_type_key ON blog_reactions (blog_id_uuid, user_id_uuid, reaction_type);",
+    "CREATE UNIQUE INDEX glossary_terms_blog_id_uuid_term_key ON glossary_terms (blog_id_uuid, term);",
+    "ALTER TABLE users ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE blogs ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE comments ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE blog_votes ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE comment_votes ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE otps ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE refresh_tokens ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE blog_reactions ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+    "ALTER TABLE glossary_terms ALTER COLUMN uuid SET DEFAULT sf_uuidv7();",
+]
+_uuidv7_added = _added_columns(_UUIDV7_BATCH)
+for _stmt in _UUIDV7_BATCH:
+    _validate_migration_statement(_stmt, _uuidv7_added)
+    assert _is_expand_allowed(_stmt, _uuidv7_added) is None, _stmt
+try:
+    execute_migration("\n".join(_UUIDV7_BATCH), phase="expand")
+except RuntimeError as e:
+    assert "mock-no-db" in str(e)
+except ValueError as e:
+    raise SystemExit(f"FAIL: live UUIDv7 expand batch rejected: {e}")
 
 # --- 5. phase=None SKIPS the guard entirely ---
 #     A contractive verb reaches the mocked _conn (RuntimeError), proving the
