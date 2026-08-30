@@ -398,6 +398,15 @@ if (await httpProbe("::1", Number(tfPort), "/api/v1/capabilities")) {
   });
 }
 
+// Browser-facing host: loopback binds are opened as localhost (readable
+// URL in the log and the browser) while internal proxy routing keeps the
+// probed host.
+const tfUrlHost = tfProxyHost === "::1" || tfProxyHost === "127.0.0.1"
+  ? "localhost"
+  : tfProxyHost.includes(":") && !tfProxyHost.startsWith("[")
+    ? `[${tfProxyHost}]`
+    : tfProxyHost;
+
 // 3b. Patch the served TrueForge UI so mermaid chat blocks render (best effort).
 // Retries until the npx package's _frontend exists (fresh npx fetch can take
 // a while); non-fatal — chat still works, graphs just render as code blocks.
@@ -641,18 +650,12 @@ server = createServer((req, res) => {
   }
 
   // Everything else redirects to the TrueForge UI served directly at :8790.
-  const tfUrlHost = tfProxyHost.includes(":") && !tfProxyHost.startsWith("[")
-    ? `[${tfProxyHost}]`
-    : tfProxyHost;
   const tfUrl = `http://${tfUrlHost}:${tfPort}${pathname}${query}`;
   res.writeHead(302, { Location: tfUrl });
   res.end(`Redirecting to TrueForge UI: ${tfUrl}`);
 });
 
 server.listen(uiPort, "127.0.0.1", () => {
-  const tfUrlHost = tfProxyHost.includes(":") && !tfProxyHost.startsWith("[")
-    ? `[${tfProxyHost}]`
-    : tfProxyHost;
   const tfUrl = `http://${tfUrlHost}:${tfPort}`;
   console.log(`[schemaforge] TrueForge UI at ${tfUrl} (local mirror http://localhost:${uiPort}, registry ${regPort}, mcp ${pgTransportPort}/${ghTransportPort})`);
   bootstrapApplyAgent(regPort).catch(() => {});
