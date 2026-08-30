@@ -27,7 +27,7 @@ def test_manifest_includes_only_enabled_servers():
     assert m["mcp_servers"][1]["require_approval_for_tools"] == []
     assert m["skills"] == [{"name": SKILL}]
     assert m["config"]["sandbox"]["enabled"] is True
-    assert m["config"]["iteration_limit"] == 60
+    assert m["config"]["iteration_limit"] == 100
 
 
 def test_disabled_server_omitted():

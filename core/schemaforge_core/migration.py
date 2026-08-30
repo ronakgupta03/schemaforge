@@ -82,6 +82,19 @@ def _sql_kind(sql: str) -> tuple[str, str]:
     if re.match(r"(DROP|TRUNCATE)\b", s, re.I):
         return "contract", "DROP/TRUNCATE (destructive)"
     if re.match(r"ALTER\b", s, re.I):
+        # Additive ALTER forms are expand-safe on a live DB (metadata-only on
+        # PG11+): ADD COLUMN/CONSTRAINT, ALTER COLUMN ... SET DEFAULT,
+        # DROP NOT NULL (constraint relaxation), VALIDATE CONSTRAINT.
+        # Everything else (type change, rename, SET NOT NULL, DROP COLUMN,
+        # SET TABLESPACE) is contractive/locking — mirroring the Alembic op.*
+        # expand set (add_column/add_constraint are expand ops).
+        if re.search(
+            r"\badd\s+(?:column|constraint)\b|\bset\s+default\b|"
+            r"\bdrop\s+not\s+null\b|\bvalidate\s+constraint\b",
+            s, re.I,
+        ):
+            return "expand", ("ALTER (additive: ADD COLUMN/CONSTRAINT, SET DEFAULT, "
+                              "DROP NOT NULL, VALIDATE CONSTRAINT)")
         return "contract", "ALTER (locking/destructive — review)"
     return "unclassified", "unrecognized SQL verb"
 

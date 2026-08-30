@@ -16,7 +16,7 @@ AGENT_NAME = "schemaforge"
 APPROVAL_POLICY: dict[str, list[str]] = {"postgres-prod": ["@write", "@destructive"]}
 PRELOAD_SERVERS: set[str] = {"postgres-prod"}
 SKILL = "schemaforge-migration"
-ITERATION_LIMIT = 60
+ITERATION_LIMIT = 100
 STATE_DIR = os.environ.get("SF_STATE_DIR", os.path.expanduser("~/.schemaforge"))
 
 

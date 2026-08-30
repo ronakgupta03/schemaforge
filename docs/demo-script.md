@@ -17,7 +17,7 @@ One sentence:
 "Two real tools via MCP — our production Postgres and GitHub — plus a
 Daytona sandbox. The only prod write path is one approval-gated tool."
 Overlay the agent card: model `cloudflare/deepseek-v4-flash`, postgres-prod
-preloaded, github deferred, sandbox on, iteration_limit 60.
+preloaded, github deferred, sandbox on, iteration_limit 100.
 
 ## 0:50–1:20 — The request + subagents
 Send the locked prompt:

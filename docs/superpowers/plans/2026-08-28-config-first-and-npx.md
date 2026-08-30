@@ -16,7 +16,7 @@
 - Registry ports: `SF_CONFIG_PORT` postgres-mcp 9001, github-mcp 9002, `SF_REGISTRY_PORT` 9010; MCP transport ports stay 8001/8002.
 - TrueForge settings shapes (live-verified): model-providers upsert `PUT /api/v1/settings/model-providers` `{"manifest": {type:'custom', name, base_url, auth:{api_key}, models:[{model_id,name,properties}]}}`; mcp-servers upsert `PUT /api/v1/settings/mcp-servers` `{"manifest": {type:'remote', name, url, description, auth?}}` + `DELETE /api/v1/settings/mcp-servers/{name}`; sandbox upsert `PUT /api/v1/settings/sandbox-providers` `{"manifest": {type:'daytona', auth:{api_key}, exec_timeout_ms, auto_stop, auto_archive, auto_delete}}`; agents upsert: find by name in `GET /api/v1/agents` then `PUT /api/v1/agents/{id}` `{"manifest": ...}` else `POST /api/v1/agents` `{"name","manifest"}`.
 - ResourceName regex: `^[a-z](?:[a-z0-9._-]{0,62}[a-z0-9])$` max 64.
-- Agent manifest fixed config: iteration_limit 60, dynamic_sub_agents/generative_ui/ask_user_questions/context_management.compaction/large_tool_response enabled; approval policy by name: postgres-prod → `["@write","@destructive"]`, others → `[]` (UI-overridable); preload true for postgres-prod else false.
+- Agent manifest fixed config: iteration_limit 100, dynamic_sub_agents/generative_ui/ask_user_questions/context_management.compaction/large_tool_response enabled; approval policy by name: postgres-prod → `["@write","@destructive"]`, others → `[]` (UI-overridable); preload true for postgres-prod else false.
 - Skill `schemaforge-migration` attached ONLY when `capabilities.sandbox.enabled`.
 - Existing test suites must stay green: core 13 tests, UI 24 tests, demo-app 6 tests.
 - Each PR Qodo-reviewed (`/agentic_review`) to Bugs(0) before merge; squash-merge + branch delete.
@@ -66,7 +66,7 @@ def test_manifest_includes_only_enabled_servers():
     assert m["mcp_servers"][1]["require_approval_for_tools"] == []
     assert m["skills"] == [{"name": SKILL}]
     assert m["config"]["sandbox"]["enabled"] is True
-    assert m["config"]["iteration_limit"] == 60
+    assert m["config"]["iteration_limit"] == 100
 
 
 def test_disabled_server_omitted():

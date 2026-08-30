@@ -39,6 +39,31 @@ def test_contract_phase_rejects_expand(tmp_path):
     with pytest.raises(ValueError, match="expand ops"):
         validate_phase_sql(p, "contract")
 
+def test_expand_accepts_additive_alter(tmp_path):
+    # Raw-SQL expand migrations legitimately ADD COLUMN / SET DEFAULT /
+    # DROP NOT NULL / VALIDATE CONSTRAINT — metadata-only or brief on PG11+,
+    # mirroring the Alembic op.* expand set and the MCP expand allowlist.
+    body = ("ALTER TABLE users ADD COLUMN id_uuid uuid;\n"
+            "ALTER TABLE users ALTER COLUMN id_uuid SET DEFAULT uuidv7();\n"
+            "ALTER TABLE users ALTER COLUMN email DROP NOT NULL;\n"
+            "ALTER TABLE orders ADD CONSTRAINT orders_user_fk FOREIGN KEY (user_id) "
+            "REFERENCES users(id) NOT VALID;\n"
+            "ALTER TABLE orders VALIDATE CONSTRAINT orders_user_fk;\n")
+    validate_phase_sql(_write(tmp_path, body), "expand")  # must NOT raise
+
+
+def test_contractive_alter_still_rejected_in_expand(tmp_path):
+    p = _write(tmp_path, "ALTER TABLE users ALTER COLUMN email SET NOT NULL;\n")
+    with pytest.raises(ValueError, match="contract ops"):
+        validate_phase_sql(p, "expand")
+
+
+def test_analyze_locks_set_default_is_brief(tmp_path):
+    p = _write(tmp_path, "ALTER TABLE users ALTER COLUMN id SET DEFAULT uuidv7();\n")
+    r = analyze_locks_sql(p)[0]
+    assert r.risk == "brief-lock"
+    assert r.rewrites is False
+
 
 def test_dollar_quote_not_split(tmp_path):
     body = ("CREATE FUNCTION f() RETURNS void AS $$ "

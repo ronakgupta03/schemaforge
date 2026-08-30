@@ -300,7 +300,24 @@ def _lock_for_sql(stmt: str, lineno: int) -> LockReport:
             return LockReport(
                 statement=first, lineno=lineno, lock="AccessExclusive", rewrites=False, risk="brief-lock",
                 alternative="ADD COLUMN ... NULL or a constant/STABLE DEFAULT is metadata-only on PG11+ (no rewrite); a volatile DEFAULT forces a rewrite")
-        # Generic ALTER (type change / rename / SET DEFAULT etc.) — assume a rewrite.
+        # SET DEFAULT — metadata-only on all supported PG (applies to new rows
+        # only), no table rewrite.
+        if re.search(r"\bset\s+default\b", s, re.I):
+            return LockReport(
+                statement=first, lineno=lineno, lock="AccessExclusive", rewrites=False, risk="brief-lock",
+                alternative="SET DEFAULT is metadata-only (no rewrite); applies to new rows only")
+        # ADD CONSTRAINT — NOT VALID is the online pattern for CHECK/FK;
+        # UNIQUE/PK still scans and builds an index under AccessExclusive.
+        if re.search(r"\badd\s+constraint\b", s, re.I):
+            return LockReport(
+                statement=first, lineno=lineno, lock="AccessExclusive", rewrites=False, risk="dangerous",
+                alternative="CHECK/FK: ADD CONSTRAINT ... NOT VALID then VALIDATE CONSTRAINT; UNIQUE/PK scans + builds an index under AccessExclusive")
+        # VALIDATE CONSTRAINT — non-blocking on PG11+ (ShareUpdateExclusive).
+        if re.search(r"\bvalidate\s+constraint\b", s, re.I):
+            return LockReport(
+                statement=first, lineno=lineno, lock="ShareUpdateExclusive", rewrites=False, risk="brief-lock",
+                alternative="VALIDATE CONSTRAINT is non-blocking (ShareUpdateExclusive) on PG11+")
+        # Generic ALTER (type change / rename / SET TABLESPACE etc.) — assume a rewrite.
         return LockReport(
             statement=first, lineno=lineno, lock="AccessExclusive", rewrites=True, risk="dangerous",
             alternative="use the new-column + backfill + rename pattern, or split locking ALTERs across expand/contract")

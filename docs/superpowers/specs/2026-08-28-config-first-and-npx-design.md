@@ -146,7 +146,7 @@ build_manifest(settings: SettingsSnapshot, instructions: str) -> AgentSpec
   UI override says otherwise), `preload` default false (postgres-prod true).
 - `skills`: `["schemaforge-migration"]` only when `capabilities.sandbox.enabled`.
 - `config.sandbox.enabled`: only when a sandbox provider is configured.
-- `config` (iteration_limit 60, dynamic_sub_agents/generative_ui/
+- `config` (iteration_limit 100, dynamic_sub_agents/generative_ui/
   ask_user_questions/context_management/large_tool_response true) — fixed
   defaults, no longer env-dependent.
 
