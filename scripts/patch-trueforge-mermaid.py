@@ -1,4 +1,4 @@
-import os, re, sys
+import os, re, subprocess, sys
 from pathlib import Path
 
 import httpx
@@ -9,15 +9,47 @@ MARK = "sf-mermaid-patch"
 # Patch EVERY npx-cached copy of the TrueForge frontend. The CLI launches
 # (or reuses) one of these via npx but does not know which hash npx resolves,
 # and a re-fetch can create a new cache entry while an older one still
-# serves — so selecting "the newest" is wrong. Patching all copies is
-# idempotent and cheap, and always covers the served one.
+# serves — so selecting a single entry is wrong. Patching all copies is
+# idempotent and cheap, and always covers the served one. The effective npm
+# cache is resolved via `npm config get cache` (Windows and custom-cache
+# setups differ from ~/.npm), with ~/.npm as fallback. SF_TF_FRONTEND pins
+# the exact frontend when the caller knows it.
+def _npm_cache_roots():
+    roots = []
+    try:
+        out = subprocess.run(
+            ["npm", "config", "get", "cache"], capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        if out and out != "null":
+            roots.append(Path(out))
+    except Exception:
+        pass
+    roots.append(Path(os.path.expanduser("~")) / ".npm")
+    uniq = []
+    for r in roots:
+        if r not in uniq:
+            uniq.append(r)
+    return uniq
+
+
 def discover_frontends():
-    roots = sorted(
-        Path(os.path.expanduser("~/.npm/_npx")).glob("*/node_modules/@truefoundry/trueforge"),
-        key=lambda p: p.stat().st_mtime if p.exists() else 0,
-        reverse=True,
-    )
-    return [r / "dist" / "_frontend" for r in roots if (r / "dist" / "_frontend" / "index.html").exists()]
+    pinned = os.environ.get("SF_TF_FRONTEND")
+    if pinned:
+        p = Path(pinned)
+        if (p / "index.html").exists():
+            return [p]
+        sys.exit(f"SF_TF_FRONTEND set but index.html missing at {p}")
+    found = []
+    for root in _npm_cache_roots():
+        for pkg in sorted(
+            root.glob("_npx/*/node_modules/@truefoundry/trueforge"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True,
+        ):
+            front = pkg / "dist" / "_frontend"
+            if (front / "index.html").exists() and front not in found:
+                found.append(front)
+    return found
 
 
 _mermaid_bytes = None
