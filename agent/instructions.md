@@ -230,7 +230,13 @@ report whenever the target DB is not quiesced.
     VALIDATE CONSTRAINT, and rejects everything else
     (DROP, SET NOT NULL, ALTER COLUMN TYPE, RENAME, SET TABLESPACE) so a
     mis-authored expand fails safely rather than touching prod.) After it
-    returns, verify with `table_schema` + `row_count`.
+    returns, verify with `table_schema` + `row_count`. Never pass UPDATEs to
+    `execute_ddl` — it is DDL-only (CREATE/ALTER/DROP/TRUNCATE/COMMENT/
+    GRANT/REVOKE) and rejects SELECT/INSERT/UPDATE/DELETE/COPY. A backfill
+    UPDATE of a column an EARLIER migration added has no gated path through
+    either tool (execute_migration only accepts UPDATEs whose SET columns
+    this batch ADDed): do NOT attempt it — surface it as an operator action
+    in the safety report and let the operator run it.
 11. Delivery — the expand PR: push the expand migration + dual-write app
     code to branch `schemaforge/<change-slug>-expand` via github MCP and
     open the PR (body = safety report + impact graph + lock report).

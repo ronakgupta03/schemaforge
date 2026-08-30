@@ -65,7 +65,11 @@ here is tied to a specific codebase.
    additive ALLOWLIST (CREATE, INSERT backfill, UPDATE backfill of columns
    the batch ADDed, ADD COLUMN/CONSTRAINT, ALTER COLUMN SET DEFAULT, DROP
    NOT NULL, VALIDATE CONSTRAINT); everything else
-   is rejected, so a mis-authored expand fails safely.
+   is rejected, so a mis-authored expand fails safely. `execute_ddl` is
+   DDL-only (no SELECT/INSERT/UPDATE/DELETE/COPY) — never pass backfills to
+   it. A backfill UPDATE of a column an EARLIER migration added has no gated
+   path (execute_migration requires SET columns to be batch-ADDed): surface
+   it as an operator action in the safety report instead of attempting it.
 9. **Concurrent-write scope.** The expand backfill + the contract
    reconciliation handle a quiesced/low-write window, and the expand app
    build dual-writes. Truly concurrent writes during the contract drops need
