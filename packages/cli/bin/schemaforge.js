@@ -409,8 +409,10 @@ async function patchTrueForgeUi() {
   ];
   const script = candidates.find((p) => existsSync(p));
   if (!script) return true;
+  // httpx lives in the provisioned venv, not necessarily the host python3.
+  const patchPy = existsSync(venvPy) ? venvPy : py;
   try {
-    const rc = await spawnAwait(py, [script], { timeout: 90000 });
+    const rc = await spawnAwait(patchPy, [script], { timeout: 90000 });
     if (rc !== 0) {
       console.warn(`[schemaforge] mermaid patch exited ${rc} — retrying`);
       return false;

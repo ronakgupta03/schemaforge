@@ -21,9 +21,8 @@ Submission write-up: [`docs/submission-writeup.md`](docs/submission-writeup.md).
 
 > The built-in TrueForge UI does not render `mermaid` code blocks by
 > default (it only syntax-highlights them). The CLI patches the served
-> frontend automatically on launch (`scripts/patch-trueforge-mermaid.py`,
-> idempotent — re-run it manually only after an `npx` re-fetch). Verified:
-> impact-graph mermaid blocks render as SVG.
+> frontend automatically on every launch (`scripts/patch-trueforge-mermaid.py`,
+> idempotent). Verified: impact-graph mermaid blocks render as SVG.
 
 ## How it works
 

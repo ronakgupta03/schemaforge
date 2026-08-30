@@ -23,9 +23,8 @@ This starts:
 Chat with the `schemaforge` agent in the TrueForge UI at
 `http://[::1]:8790` (or `http://localhost:8790` when TrueForge reuses an
 IPv4 listener). The CLI patches the served frontend automatically on
-launch so impact-graph mermaid blocks render inside chat
-(`scripts/patch-trueforge-mermaid.py`, idempotent — re-run manually only
-after an `npx` re-fetch).
+every launch so impact-graph mermaid blocks render inside chat
+(`scripts/patch-trueforge-mermaid.py`, idempotent).
 
 The SchemaForge fork of the TrueForge UI additionally ships evidence tabs —
 **Impact / Report / Changes / Verification / Activity** — that load the
