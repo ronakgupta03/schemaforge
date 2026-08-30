@@ -46,17 +46,21 @@ here is tied to a specific codebase.
 5. The pre-approval flow must fit inside the server's execution window
    (default 600 s): no DDL timing / re-seeding / re-verifying before the
    approval pause — measure DDL wall time only after approval.
-6. **Two-phase.** Never apply a contract migration in the same turn as an
+6. **Session-scoped artifacts.** Use `/workspace/out/${SF_SESSION_ID}/`
+   for all generated artifacts when that variable is set; otherwise fall
+   back to `/workspace/out/`. This keeps each TrueForge chat session's files
+   separate and loadable in the Evidence UI.
+7. **Two-phase.** Never apply a contract migration in the same turn as an
    expand migration. Expand is additive (safe under live traffic); contract
    removes schema and needs the dual-write app deployed first. After the
    expand PR is applied, END THE TURN and wait for the operator to say
    "contract <slug>".
-7. **Contract-gate before contract.** Never propose or apply a contract
+8. **Contract-gate before contract.** Never propose or apply a contract
    migration until the deterministic contract-gate
    (`sf-pipeline contract-gate`) returns `SAFE`. If `BLOCKED`, list every
    blocker and STOP — tell the operator which code still reads the old
    columns and must be deployed first.
-8. **Expand is additive only.** Expand migrations use `create_table`,
+9. **Expand is additive only.** Expand migrations use `create_table`,
    `add_column` (nullable or with a default), `create_index`,
    `INSERT..SELECT` backfill, and `alter_column(..., nullable=True)` (DROP
    NOT NULL) on legacy columns the final app will stop writing — NO `drop_*`,
@@ -70,7 +74,7 @@ here is tied to a specific codebase.
    it. A backfill UPDATE of a column an EARLIER migration added has no gated
    path (execute_migration requires SET columns to be batch-ADDed): surface
    it as an operator action in the safety report instead of attempting it.
-9. **Concurrent-write scope.** The expand backfill + the contract
+10. **Concurrent-write scope.** The expand backfill + the contract
    reconciliation handle a quiesced/low-write window, and the expand app
    build dual-writes. Truly concurrent writes during the contract drops need
    app-level dual-write or a brief cutover quiesce — the application's

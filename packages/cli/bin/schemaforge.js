@@ -503,6 +503,15 @@ function getProxyTarget(urlPath) {
     };
   }
 
+  if (pathname === "/tf" || pathname.startsWith("/tf/")) {
+    const subpath = pathname.slice("/tf".length) || "/";
+    return {
+      host: tfProxyHost,
+      port: Number(tfPort),
+      path: subpath + query,
+    };
+  }
+
   if (pathname === "/api" || pathname.startsWith("/api/")) {
     return {
       host: tfProxyHost,
@@ -621,49 +630,30 @@ server = createServer((req, res) => {
     return;
   }
 
-  let reqPath;
-  try {
-    reqPath = decodeURIComponent((req.url || "/").split("?")[0]);
-  } catch (err) {
-    if (!res.headersSent) {
-      res.writeHead(400, { "Content-Type": "text/plain" });
-      res.end("Bad Request: Malformed URI");
-    }
-    return;
-  }
-
-  let filePath = normalize(join(DIST, reqPath === "/" ? "index.html" : reqPath));
-
-  if (!filePath.startsWith(DIST)) {
-    res.writeHead(403, { "Content-Type": "text/plain" });
-    res.end("Forbidden");
-  } else {
-    if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
-      filePath = join(DIST, "index.html");
-    }
-
-    if (!existsSync(filePath)) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("UI not built. Run 'npm run build' in ui/ or build the package.");
-    } else {
-      const ext = extname(filePath).toLowerCase();
-      const contentType = MIME[ext] || "application/octet-stream";
-      res.writeHead(200, { "Content-Type": contentType });
-      createReadStream(filePath).pipe(res);
-    }
-  }
+  // The evidence UI is intentionally off for now — route everything else to the
+  // forked/patched TrueForge UI served directly at :8790.
+  const tfUrlHost = tfProxyHost.includes(":") && !tfProxyHost.startsWith("[")
+    ? `[${tfProxyHost}]`
+    : tfProxyHost;
+  const tfUrl = `http://${tfUrlHost}:${tfPort}${pathname}${query}`;
+  res.writeHead(302, { Location: tfUrl });
+  res.end(`Redirecting to TrueForge UI: ${tfUrl}`);
 });
 
 server.listen(uiPort, "127.0.0.1", () => {
-  console.log(`[schemaforge] UI at http://localhost:${uiPort} (TrueForge ${tfPort}, registry ${regPort}, mcp ${pgTransportPort}/${ghTransportPort})`);
+  const tfUrlHost = tfProxyHost.includes(":") && !tfProxyHost.startsWith("[")
+    ? `[${tfProxyHost}]`
+    : tfProxyHost;
+  const tfUrl = `http://${tfUrlHost}:${tfPort}`;
+  console.log(`[schemaforge] TrueForge UI at ${tfUrl}, local mirror at http://localhost:${uiPort} (registry ${regPort}, mcp ${pgTransportPort}/${ghTransportPort})`);
   bootstrapApplyAgent(regPort).catch(() => {});
   if (!noOpen) {
     if (process.platform === "darwin") {
-      spawn("open", [`http://localhost:${uiPort}`], { stdio: "ignore" }).on("error", () => {});
+      spawn("open", [tfUrl], { stdio: "ignore" }).on("error", () => {});
     } else if (process.platform === "win32") {
-      spawn("cmd.exe", ["/c", "start", `http://localhost:${uiPort}`], { stdio: "ignore" }).on("error", () => {});
+      spawn("cmd.exe", ["/c", "start", tfUrl], { stdio: "ignore" }).on("error", () => {});
     } else {
-      spawn("xdg-open", [`http://localhost:${uiPort}`], { stdio: "ignore" }).on("error", () => {});
+      spawn("xdg-open", [tfUrl], { stdio: "ignore" }).on("error", () => {});
     }
   }
 });

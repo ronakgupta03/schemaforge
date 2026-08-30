@@ -64,7 +64,7 @@ observer = """
     var codes = document.querySelectorAll('pre code.language-mermaid, pre code.mermaid');
     for (var i=0;i<codes.length;i++) renderBlock(codes[i]);
   }
-  mermaid.initialize({ startOnLoad:false, securityLevel:'loose' });
+  mermaid.initialize({ startOnLoad:false, securityLevel:'loose', maxTextSize:2000000, maxEdges:10000 });
   var mo = new MutationObserver(scan);
   mo.observe(document.documentElement, {childList:true, subtree:true});
   scan();

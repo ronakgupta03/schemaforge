@@ -1,26 +1,17 @@
-import { EvidencePanel } from "./components/EvidencePanel";
-
-// The chat is the TrueForge server's own UI (the npm @truefoundry/trueforge-ui
-// SDK crashes in this build environment with a tap getSnapshot loop — verified
-// across React 18/19, dev/prod, and all dedupe configs; the server's bundled
-// build works). Embedding it keeps the full product chat: streaming, approvals,
-// session history.
-// Production: same-origin /tf/ route serving the TrueForge UI (see deploy/).
-const CHAT_URL = import.meta.env.VITE_CHAT_URL ?? (import.meta.env.DEV ? "http://[::1]:8790" : "/tf/");
+// SchemaForge Evidence UI: full TrueForge native chat.
+// The separate side panel is removed; the bundled TrueForge UI (forked/patched
+// with native Impact/Report/Changes/Verification/Activity tabs) is served from
+// the same origin via the /tf/* proxy to the TrueForge server at :8790.
+const CHAT_URL = import.meta.env.VITE_CHAT_URL ?? "/tf/";
 
 export default function App() {
   return (
-    <div className="flex h-dvh w-full">
-      <div className="h-full w-[55%] min-w-0 border-r" style={{ borderColor: "var(--sf-border)" }}>
-        <iframe
-          src={CHAT_URL}
-          title="TrueForge"
-          className="h-full w-full border-0"
-        />
-      </div>
-      <div className="h-full flex-1 min-w-0">
-        <EvidencePanel />
-      </div>
+    <div className="h-dvh w-full">
+      <iframe
+        src={CHAT_URL}
+        title="TrueForge"
+        className="h-full w-full border-0"
+      />
     </div>
   );
 }

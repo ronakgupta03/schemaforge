@@ -53,6 +53,11 @@ in order:
   agent-authored PR; do not regress it.)
 - The operator's app tests are the API contract. Never edit them to make a
   migration pass.
+- **Write session-scoped artifacts.** Use `/workspace/out/${SF_SESSION_ID}/`
+  for all generated artifacts (graph.mmd, report.md, db.json, code.json,
+  *.sql, diff.patch) when `SF_SESSION_ID` is set in the sandbox environment;
+  otherwise use `/workspace/out/`. This keeps each chat session's files in
+  its own directory so the Evidence UI can load them later.
 
 ## Tool inventory (detect at runtime — some servers may be absent)
 
