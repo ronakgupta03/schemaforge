@@ -69,6 +69,7 @@ observer = """
       lastTry[pre].ready = true;
       var div = document.createElement('div');
       div.className = 'sf-mermaid-render';
+      div.setAttribute('style', 'max-height:70vh;overflow:auto');
       div.innerHTML = r.svg;
       pre.parentNode.replaceChild(div, pre);
     }).catch(function(e){
